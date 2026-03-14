@@ -780,6 +780,99 @@ async def price_ecosystem_match(request: EcosystemPriceRequest) -> dict[str, Any
 
 
 # ---------------------------------------------------------------------------
+# POST /prematch/race-to-x — Race to X legs market
+# ---------------------------------------------------------------------------
+
+
+class RaceToXRequest(BaseModel):
+    """Race-to-X legs request."""
+    competition_code: str = Field(..., description="Format code, e.g. 'PDC_WC'")
+    round_name: str = Field(..., description="Round name")
+    p1_id: str
+    p2_id: str
+    p1_three_da: float = Field(..., gt=0, lt=200)
+    p2_three_da: float = Field(..., gt=0, lt=200)
+    race_to: int = Field(..., ge=1, le=14, description="Legs required to win race")
+    p1_starts_first: bool = True
+    base_margin: float = Field(default=0.05, gt=0.0, le=0.15)
+    double_start_required: Optional[bool] = None
+
+
+@router.post(
+    "/prematch/race-to-x",
+    summary="Race to X legs market",
+    response_description="Win probabilities and decimal odds for race-to-X legs",
+    tags=["Pre-Match"],
+)
+async def race_to_x_price(request: RaceToXRequest) -> dict[str, Any]:
+    """
+    Price the 'Race to X legs' market.
+
+    Given hold/break probabilities derived from the players' 3DA averages,
+    compute the exact probability that player 1 reaches X legs before player 2.
+
+    This is the canonical 'first to X legs' market:
+    e.g., 'Race to 3 legs' in a Premier League match, or 'First to 5' in
+    the first round of the World Championship.
+    """
+    from engines.match_layer.race_to_x_engine import race_to_x, apply_margin
+
+    hb_req = MatchPriceRequest(
+        competition_code=request.competition_code,
+        round_name=request.round_name,
+        p1_id=request.p1_id,
+        p2_id=request.p2_id,
+        p1_three_da=request.p1_three_da,
+        p2_three_da=request.p2_three_da,
+        p1_starts_first=request.p1_starts_first,
+        regime=0,
+        starter_confidence=1.0,
+        source_confidence=1.0,
+        model_agreement=1.0,
+        market_liquidity="high",
+        base_margin=request.base_margin,
+        double_start_required=request.double_start_required,
+    )
+    hb, _ = _compute_hold_break(hb_req)
+
+    try:
+        result = race_to_x(
+            target=request.race_to,
+            p1_hold=hb.p1_hold,
+            p2_hold=hb.p2_hold,
+            p1_starts=request.p1_starts_first,
+        )
+    except (ValueError, Exception) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    true_probs = {"p1_win": round(result.p1_win, 6), "p2_win": round(result.p2_win, 6)}
+    adjusted = apply_margin(result, request.base_margin)
+    decimal_odds = {k: round(1.0 / v, 4) if v > 1e-9 else None for k, v in adjusted.items()}
+
+    logger.info(
+        "race_to_x_priced",
+        competition=request.competition_code,
+        round_name=request.round_name,
+        race_to=request.race_to,
+        p1_win_true=round(result.p1_win, 4),
+    )
+
+    return {
+        "competition_code": request.competition_code,
+        "round_name": request.round_name,
+        "race_to": request.race_to,
+        "p1_id": request.p1_id,
+        "p2_id": request.p2_id,
+        "p1_hold": round(hb.p1_hold, 6),
+        "p1_break": round(hb.p1_break, 6),
+        "true_probabilities": true_probs,
+        "adjusted_probabilities": adjusted,
+        "decimal_odds": decimal_odds,
+        "applied_margin": round(request.base_margin, 5),
+    }
+
+
+# ---------------------------------------------------------------------------
 # POST /prematch/smart-price — DB-backed price using stored player stats
 # ---------------------------------------------------------------------------
 
@@ -811,17 +904,23 @@ async def smart_price(
     """
     from sqlalchemy import text as sql_text
 
-    # Fetch both players in a single query
+    # Fetch both players in a single query (including R0 ML features)
     result = await session.execute(
         sql_text("""
             SELECT p.id,
                    COALESCE(p.dartsorakel_3da, :fallback) AS three_da,
                    COALESCE(e.rating_after, 1500.0) AS elo_rating,
                    p.source_confidence,
-                   p.first_name, p.last_name, p.nickname
+                   p.first_name, p.last_name, p.nickname,
+                   COALESCE(p.pdc_ranking, 200) AS pdc_ranking,
+                   p.country_code
             FROM darts_players p
             LEFT JOIN darts_elo_ratings e
                 ON e.player_id = p.id AND e.pool = 'pdc_mens'
+                AND e.match_date = (
+                    SELECT MAX(e2.match_date) FROM darts_elo_ratings e2
+                    WHERE e2.player_id = p.id AND e2.pool = 'pdc_mens'
+                )
             WHERE p.id IN (:p1_id, :p2_id)
         """),
         {"p1_id": request.p1_id, "p2_id": request.p2_id,
@@ -842,6 +941,42 @@ async def smart_price(
     p1_elo = float(p1_row[2])
     p2_elo = float(p2_row[2])
     src_conf = float(min(p1_row[3] or 0.85, p2_row[3] or 0.85))
+    p1_rank = float(p1_row[7] or 200)
+    p2_rank = float(p2_row[7] or 200)
+    p1_country = p1_row[8] or ""
+    p2_country = p2_row[8] or ""
+
+    # --- R0 ML model blend (if model is available) ---
+    ml_p1_win: Optional[float] = None
+    ml_source = "unavailable"
+    try:
+        from models.loader import model_store
+        import numpy as np
+        r0 = model_store.get("r0_logit")
+        if r0 is not None:
+            fmt = request.competition_code
+            year = 2026
+            feat = np.array([[
+                p1_elo - p2_elo,
+                p1_elo, p2_elo,
+                p1_three_da - p2_three_da,
+                p1_three_da, p2_three_da,
+                p2_rank - p1_rank,
+                min(p1_rank, 300) / 300.0,
+                min(p2_rank, 300) / 300.0,
+                1.0 if (p1_country and p1_country == p2_country) else 0.0,
+                (year - 2000) / 30.0,
+                1.0 if fmt.startswith("PDC_WC") else 0.0,
+                1.0 if fmt == "PDC_PL" else 0.0,
+                1.0 if not (fmt.startswith("PDC_WC") or fmt == "PDC_PL") else 0.0,
+            ]], dtype=np.float32)
+            scaler = r0["scaler"]
+            model = r0["model"]
+            feat_s = scaler.transform(feat)
+            ml_p1_win = float(model.predict_proba(feat_s)[0, 1])
+            ml_source = "r0_logit"
+    except Exception:
+        pass  # model unavailable — use Markov only
 
     # Build internal request
     inner = MatchPriceRequest(
@@ -871,7 +1006,20 @@ async def smart_price(
     except (DartsEngineError, DartsDataError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
-    true_probs = {"p1_win": match_result.p1_win, "p2_win": match_result.p2_win}
+    markov_p1_win = match_result.p1_win
+    markov_p2_win = match_result.p2_win
+
+    # Blend: 60% Markov (format-aware), 40% R0 ML (ELO signal)
+    if ml_p1_win is not None:
+        blend_p1 = 0.60 * markov_p1_win + 0.40 * ml_p1_win
+        blend_p2 = 1.0 - blend_p1
+        final_p1, final_p2 = blend_p1, blend_p2
+        pricing_model = "markov_r0_blend"
+    else:
+        final_p1, final_p2 = markov_p1_win, markov_p2_win
+        pricing_model = "markov_only"
+
+    true_probs: dict[str, float] = {"p1_win": final_p1, "p2_win": final_p2}
     if match_result.draw > 0:
         true_probs["draw"] = match_result.draw
 
@@ -886,15 +1034,23 @@ async def smart_price(
         "competition_code": request.competition_code,
         "round_name": request.round_name,
         "p1": {"id": request.p1_id, "name": _name(p1_row),
-               "three_da": round(p1_three_da, 2), "elo": round(p1_elo, 1)},
+               "three_da": round(p1_three_da, 2), "elo": round(p1_elo, 1),
+               "pdc_ranking": int(p1_rank)},
         "p2": {"id": request.p2_id, "name": _name(p2_row),
-               "three_da": round(p2_three_da, 2), "elo": round(p2_elo, 1)},
+               "three_da": round(p2_three_da, 2), "elo": round(p2_elo, 1),
+               "pdc_ranking": int(p2_rank)},
         "true_probabilities": {k: round(v, 6) for k, v in true_probs.items()},
         "adjusted_probabilities": {k: round(v, 6) for k, v in adjusted.items()},
         "decimal_odds": decimal_odds,
         "applied_margin": round(margin, 5),
         "p1_hold": round(hb.p1_hold, 6),
         "p1_break": round(hb.p1_break, 6),
+        "pricing_model": pricing_model,
+        "model_components": {
+            "markov_p1_win": round(markov_p1_win, 6),
+            "ml_p1_win": round(ml_p1_win, 6) if ml_p1_win is not None else None,
+            "ml_source": ml_source,
+        },
         "data_sources": {
             "three_da": "dartsorakel" if p1_three_da != request.fallback_3da else "fallback",
             "elo": "pdc_mens_pool",
