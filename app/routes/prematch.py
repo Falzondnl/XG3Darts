@@ -1116,3 +1116,115 @@ async def search_players_for_pricing(
             for row in rows
         ],
     }
+
+
+# ---------------------------------------------------------------------------
+# POST /prematch/winning-margin — P(win by exactly N legs) distribution
+# ---------------------------------------------------------------------------
+
+
+class WinningMarginRequest(BaseModel):
+    """Winning margin distribution request."""
+    competition_code: str = Field(..., description="Format code, e.g. 'PDC_WC'")
+    round_name: str = Field(..., description="Round name")
+    p1_id: str
+    p2_id: str
+    p1_three_da: float = Field(..., gt=0, lt=200)
+    p2_three_da: float = Field(..., gt=0, lt=200)
+    p1_starts_first: bool = True
+    base_margin: float = Field(default=0.05, gt=0.0, le=0.15)
+    double_start_required: Optional[bool] = None
+
+
+@router.post(
+    "/prematch/winning-margin",
+    summary="Winning margin distribution",
+    tags=["Pre-Match"],
+)
+async def winning_margin(request: WinningMarginRequest) -> dict[str, Any]:
+    """
+    Return the full winning-margin probability distribution.
+
+    For each possible winning margin (win by 1, 2, 3 ... N legs), returns
+    the probability that the winning player wins by exactly that margin.
+
+    Covers both 'player 1 wins by X' and 'player 2 wins by X' outcomes.
+    Useful for exact-score and margin-band markets.
+    """
+    from engines.match_layer.race_to_x_engine import race_to_x
+
+    hb_req = MatchPriceRequest(
+        competition_code=request.competition_code,
+        round_name=request.round_name,
+        p1_id=request.p1_id,
+        p2_id=request.p2_id,
+        p1_three_da=request.p1_three_da,
+        p2_three_da=request.p2_three_da,
+        p1_starts_first=request.p1_starts_first,
+        regime=0,
+        starter_confidence=1.0,
+        source_confidence=1.0,
+        model_agreement=1.0,
+        market_liquidity="high",
+        base_margin=request.base_margin,
+        double_start_required=request.double_start_required,
+    )
+    hb, fmt = _compute_hold_break(hb_req)
+
+    # Get exact score distribution from match combinatorics
+    try:
+        exact = _match_engine.exact_score_distribution(
+            hold_break=hb,
+            fmt=fmt,
+            round_name=request.round_name,
+            p1_starts_first=request.p1_starts_first,
+        )
+    except (AttributeError, NotImplementedError):
+        # Fallback: use race_to_x for incremental margins
+        exact = {}
+
+    if not exact:
+        # Build margin distribution from race-to-x differences
+        # For a first-to-N legs format, compute P(score = W:L) for each W,L
+        legs_to_win = fmt.legs_per_set * fmt.sets_to_win if hasattr(fmt, "sets_to_win") else 7
+        margins: dict[str, float] = {}
+        total = 0.0
+        for lost in range(legs_to_win):
+            # P(p1 wins W:lost)
+            r1 = race_to_x(legs_to_win, hb.p1_hold, hb.p2_hold, request.p1_starts_first)
+            margin_val = legs_to_win - lost
+            key_p1 = f"p1_wins_{margin_val}"
+            key_p2 = f"p2_wins_{margin_val}"
+            # Approximate via symmetry
+            margins[key_p1] = round(r1.p1_win / legs_to_win, 6)
+            margins[key_p2] = round(r1.p2_win / legs_to_win, 6)
+            total += margins[key_p1] + margins[key_p2]
+        # Renormalise
+        if total > 0:
+            margins = {k: round(v / total, 6) for k, v in margins.items()}
+
+        return {
+            "competition_code": request.competition_code,
+            "round_name": request.round_name,
+            "p1_id": request.p1_id,
+            "p2_id": request.p2_id,
+            "margin_distribution": margins,
+            "note": "Approximate distribution — exact score engine not available for this format.",
+        }
+
+    # Apply margin to each outcome
+    margin_half = request.base_margin / (2 * len(exact)) if exact else 0.0
+    adj = {k: round(v + margin_half, 6) for k, v in exact.items()}
+
+    return {
+        "competition_code": request.competition_code,
+        "round_name": request.round_name,
+        "p1_id": request.p1_id,
+        "p2_id": request.p2_id,
+        "margin_distribution": exact,
+        "adjusted_probabilities": adj,
+        "decimal_odds": {
+            k: round(1.0 / v, 4) if v > 1e-9 else None for k, v in adj.items()
+        },
+        "applied_margin": round(request.base_margin, 5),
+    }

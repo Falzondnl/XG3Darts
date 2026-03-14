@@ -399,3 +399,100 @@ async def price_segment_prop(request: PropSegmentRequest) -> dict[str, Any]:
         "n_attempts": request.n_attempts,
         "n_hits": request.n_hits,
     }
+
+
+# ---------------------------------------------------------------------------
+# POST /props/most-180s — Which player hits more 180s in the match
+# ---------------------------------------------------------------------------
+
+
+class MostOneEightiesRequest(BaseModel):
+    """Most 180s in match — head-to-head 180 market."""
+    p1_id: str
+    p2_id: str
+    p1_180_rate: float = Field(..., ge=0.0, le=1.0,
+                                description="P1 180-per-visit rate (e.g. 0.08)")
+    p2_180_rate: float = Field(..., ge=0.0, le=1.0,
+                                description="P2 180-per-visit rate")
+    expected_legs: int = Field(default=10, ge=1, le=50,
+                                description="Expected number of legs in match")
+    visits_per_leg: float = Field(default=16.5, ge=5.0, le=40.0,
+                                   description="Average visits per player per leg")
+    base_margin: float = Field(default=0.05, gt=0.0, le=0.15)
+
+
+@router.post(
+    "/props/most-180s",
+    summary="Most 180s in match — head-to-head player market",
+    tags=["Props"],
+)
+async def price_most_180s(request: MostOneEightiesRequest) -> dict[str, Any]:
+    """
+    Price the 'Player X to hit most 180s' market.
+
+    Uses a Poisson model per player:
+        λ_i = 180_rate_i × visits_per_leg × expected_legs
+    P(p1 hits more 180s) = Σ_k P(Poisson(λ1) = k) × P(Poisson(λ2) < k)
+    Tie probability is calculated and split evenly between the two players.
+    """
+    import math
+
+    lam1 = request.p1_180_rate * request.visits_per_leg * request.expected_legs
+    lam2 = request.p2_180_rate * request.visits_per_leg * request.expected_legs
+
+    # Poisson PMF cache
+    max_k = max(int(lam1 * 4 + 20), int(lam2 * 4 + 20), 50)
+
+    def poisson_pmf(lam: float, k: int) -> float:
+        if k < 0:
+            return 0.0
+        return math.exp(-lam) * (lam ** k) / math.factorial(k)
+
+    def poisson_cdf(lam: float, k: int) -> float:
+        return sum(poisson_pmf(lam, i) for i in range(k + 1))
+
+    p1_more = sum(
+        poisson_pmf(lam1, k) * poisson_cdf(lam2, k - 1)
+        for k in range(1, max_k)
+    )
+    p2_more = sum(
+        poisson_pmf(lam2, k) * poisson_cdf(lam1, k - 1)
+        for k in range(1, max_k)
+    )
+    p_tie = max(0.0, 1.0 - p1_more - p2_more)
+
+    # Distribute tie probability equally (no push market)
+    p1_adj_true = p1_more + p_tie * 0.5
+    p2_adj_true = p2_more + p_tie * 0.5
+
+    half = request.base_margin / 2.0
+    p1_book = round(p1_adj_true + half, 6)
+    p2_book = round(p2_adj_true + half, 6)
+    total = p1_book + p2_book
+    p1_book = round(p1_book / total * (1 + request.base_margin), 6)
+    p2_book = round(p2_book / total * (1 + request.base_margin), 6)
+
+    logger.info(
+        "most_180s_priced",
+        p1_id=request.p1_id, p2_id=request.p2_id,
+        lam1=round(lam1, 2), lam2=round(lam2, 2),
+        p1_win=round(p1_adj_true, 4),
+    )
+
+    return {
+        "p1_id": request.p1_id,
+        "p2_id": request.p2_id,
+        "expected_180s_p1": round(lam1, 2),
+        "expected_180s_p2": round(lam2, 2),
+        "true_probabilities": {
+            "p1_most": round(p1_adj_true, 6),
+            "p2_most": round(p2_adj_true, 6),
+            "tie": round(p_tie, 6),
+        },
+        "adjusted_probabilities": {"p1_most": p1_book, "p2_most": p2_book},
+        "decimal_odds": {
+            "p1_most": round(1.0 / p1_book, 4) if p1_book > 1e-9 else None,
+            "p2_most": round(1.0 / p2_book, 4) if p2_book > 1e-9 else None,
+        },
+        "applied_margin": round(request.base_margin, 5),
+    }
