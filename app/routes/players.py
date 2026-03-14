@@ -418,10 +418,15 @@ async def search_players(
         result = await session.execute(
             sql_text(
                 """
-                SELECT id, slug, nickname, pdc_ranking, dartsorakel_3da
+                SELECT id, first_name, last_name, nickname, slug,
+                       pdc_ranking, dartsorakel_3da, dartsorakel_rank,
+                       country_code, pdc_id
                 FROM darts_players
-                WHERE nickname ILIKE :pattern
-                   OR slug ILIKE :pattern
+                WHERE first_name ILIKE :pattern
+                   OR last_name  ILIKE :pattern
+                   OR nickname   ILIKE :pattern
+                   OR slug       ILIKE :pattern
+                   OR (first_name || ' ' || last_name) ILIKE :pattern
                 ORDER BY pdc_ranking ASC NULLS LAST
                 LIMIT :limit
                 """
@@ -436,13 +441,17 @@ async def search_players(
             "players": [
                 {
                     "player_id": row[0],
-                    "slug": row[1],
-                    "nickname": row[2],
-                    "pdc_ranking": row[3],
-                    "dartsorakel_3da": row[4],
+                    "name": f"{row[1]} {row[2]}".strip(),
+                    "nickname": row[3],
+                    "slug": row[4],
+                    "pdc_ranking": row[5],
+                    "dartsorakel_3da": row[6],
+                    "dartsorakel_rank": row[7],
+                    "country_code": row[8],
+                    "pdc_id": row[9],
                     "_links": {
                         "profile": _service_url(f"/players/{row[0]}"),
-                        "regime": _service_url(f"/players/{row[0]}/regime"),
+                        "elo": _service_url(f"/players/{row[0]}/elo"),
                     },
                 }
                 for row in rows

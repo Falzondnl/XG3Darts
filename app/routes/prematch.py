@@ -28,8 +28,11 @@ from __future__ import annotations
 from typing import Any, Optional
 
 import structlog
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from db.session import get_session_dependency
 
 from competition.format_registry import get_format, DartsFormatError
 from engines.errors import DartsDataError, DartsEngineError
@@ -773,4 +776,127 @@ async def price_ecosystem_match(request: EcosystemPriceRequest) -> dict[str, Any
         "applied_margin": round(margin, 5),
         "p1_hold": round(hb.p1_hold, 6),
         "p1_break": round(hb.p1_break, 6),
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /prematch/smart-price — DB-backed price using stored player stats
+# ---------------------------------------------------------------------------
+
+class SmartPriceRequest(BaseModel):
+    """Smart price request — fetches 3DA and ELO from DB automatically."""
+    competition_code: str = Field(..., description="Format code, e.g. 'PDC_WC'")
+    round_name: str = Field(..., description="Round name, e.g. 'Final'")
+    p1_id: str = Field(..., description="Player 1 UUID (from /players/search)")
+    p2_id: str = Field(..., description="Player 2 UUID")
+    p1_starts_first: bool = True
+    base_margin: float = Field(default=0.05, gt=0.0, le=0.15)
+    fallback_3da: float = Field(default=50.0, gt=0, lt=200,
+                                 description="3DA fallback if not in DB")
+
+
+@router.post(
+    "/prematch/smart-price",
+    summary="Price match using player stats from database",
+    response_model=dict,
+    tags=["Pre-Match"],
+)
+async def smart_price(
+    request: SmartPriceRequest,
+    session: AsyncSession = Depends(get_session_dependency),
+) -> dict[str, Any]:
+    """
+    Fetch player 3DA and ELO from the database, then compute prices.
+    No need to supply p1_three_da / p2_three_da — they are loaded automatically.
+    """
+    from sqlalchemy import text as sql_text
+
+    # Fetch both players in a single query
+    result = await session.execute(
+        sql_text("""
+            SELECT p.id,
+                   COALESCE(p.dartsorakel_3da, :fallback) AS three_da,
+                   COALESCE(e.rating_after, 1500.0) AS elo_rating,
+                   p.source_confidence,
+                   p.first_name, p.last_name, p.nickname
+            FROM darts_players p
+            LEFT JOIN darts_elo_ratings e
+                ON e.player_id = p.id AND e.pool = 'pdc_mens'
+            WHERE p.id IN (:p1_id, :p2_id)
+        """),
+        {"p1_id": request.p1_id, "p2_id": request.p2_id,
+         "fallback": request.fallback_3da},
+    )
+    rows = {row[0]: row for row in result.fetchall()}
+
+    if request.p1_id not in rows:
+        raise HTTPException(status_code=404, detail=f"Player {request.p1_id} not found")
+    if request.p2_id not in rows:
+        raise HTTPException(status_code=404, detail=f"Player {request.p2_id} not found")
+
+    p1_row = rows[request.p1_id]
+    p2_row = rows[request.p2_id]
+
+    p1_three_da = float(p1_row[1])
+    p2_three_da = float(p2_row[1])
+    p1_elo = float(p1_row[2])
+    p2_elo = float(p2_row[2])
+    src_conf = float(min(p1_row[3] or 0.85, p2_row[3] or 0.85))
+
+    # Build internal request
+    inner = MatchPriceRequest(
+        competition_code=request.competition_code,
+        round_name=request.round_name,
+        p1_id=request.p1_id,
+        p2_id=request.p2_id,
+        p1_three_da=p1_three_da,
+        p2_three_da=p2_three_da,
+        p1_starts_first=request.p1_starts_first,
+        regime=0,  # R0 — no live visit data
+        starter_confidence=0.85,
+        source_confidence=src_conf,
+        model_agreement=1.0,
+        market_liquidity="high",
+        base_margin=request.base_margin,
+    )
+
+    hb, fmt = _compute_hold_break(inner)
+    try:
+        match_result = _match_engine.price_match(
+            hold_break=hb,
+            fmt=fmt,
+            round_name=request.round_name,
+            p1_starts_first=request.p1_starts_first,
+        )
+    except (DartsEngineError, DartsDataError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    true_probs = {"p1_win": match_result.p1_win, "p2_win": match_result.p2_win}
+    if match_result.draw > 0:
+        true_probs["draw"] = match_result.draw
+
+    adjusted, margin = _apply_margin(inner, fmt, true_probs)
+    decimal_odds = {k: round(1.0 / v, 4) if v > 1e-9 else None for k, v in adjusted.items()}
+
+    def _name(row) -> str:
+        n = f"{row[4] or ''} {row[5] or ''}".strip()
+        return row[6] or n or "Unknown"
+
+    return {
+        "competition_code": request.competition_code,
+        "round_name": request.round_name,
+        "p1": {"id": request.p1_id, "name": _name(p1_row),
+               "three_da": round(p1_three_da, 2), "elo": round(p1_elo, 1)},
+        "p2": {"id": request.p2_id, "name": _name(p2_row),
+               "three_da": round(p2_three_da, 2), "elo": round(p2_elo, 1)},
+        "true_probabilities": {k: round(v, 6) for k, v in true_probs.items()},
+        "adjusted_probabilities": {k: round(v, 6) for k, v in adjusted.items()},
+        "decimal_odds": decimal_odds,
+        "applied_margin": round(margin, 5),
+        "p1_hold": round(hb.p1_hold, 6),
+        "p1_break": round(hb.p1_break, 6),
+        "data_sources": {
+            "three_da": "dartsorakel" if p1_three_da != request.fallback_3da else "fallback",
+            "elo": "pdc_mens_pool",
+        },
     }
