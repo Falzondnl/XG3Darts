@@ -400,7 +400,7 @@ async def explain_player_pricing(
 
 
 @router.get(
-    "/players/_search",
+    "/player-search",
     summary="Search players by name",
     response_description="List of matching players",
 )
