@@ -1,0 +1,76 @@
+# ============================================================
+# XG3 Darts Microservice — Python Dependencies
+# ============================================================
+
+# ---- Web Framework ----
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+python-multipart>=0.0.6
+
+# ---- Database ----
+sqlalchemy[asyncio]>=2.0.0
+asyncpg>=0.29.0
+alembic>=1.13.0
+greenlet>=3.0.0
+
+# ---- Cache ----
+redis[hiredis]>=5.0.0
+
+# ---- Observability ----
+prometheus-client>=0.19.0
+
+# ---- Logging ----
+structlog>=23.0.0
+python-json-logger>=2.0.0
+
+# ---- HTTP / Scraping ----
+aiohttp>=3.9.0
+aio-pika>=9.3.0          # RabbitMQ client for Optic Odds live feed (optional)
+httpx>=0.26.0
+beautifulsoup4>=4.12.0
+lxml>=5.0.0
+playwright>=1.40.0
+
+# ---- Data Science ----
+pandas>=2.1.0
+numpy>=1.26.0
+scipy>=1.11.0
+
+# ---- Machine Learning ----
+scikit-learn>=1.4.0
+lightgbm>=4.2.0
+xgboost>=2.0.0
+catboost>=1.2.2
+optuna>=3.4.0
+shap>=0.44.0
+
+# ---- Bayesian / Probabilistic ----
+pymc>=5.10.0
+
+# ---- Deep Learning ----
+torch>=2.1.0
+
+# ---- JIT / GPU ----
+numba>=0.59.0
+
+# ---- Distributed Computing ----
+ray>=2.9.0
+
+# ---- Causal Inference ----
+econml>=0.15.0
+
+# ---- Environment ----
+python-dotenv>=1.0.0
+
+# ---- Testing ----
+pytest>=7.4.0
+pytest-asyncio>=0.23.0
+pytest-cov>=4.1.0
+pytest-xdist>=3.5.0
+httpx>=0.26.0
+
+# ---- Type Checking / Quality ----
+mypy>=1.8.0
+ruff>=0.2.0
