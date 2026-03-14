@@ -38,11 +38,14 @@ WORKDIR /app
 # Copy application source
 COPY --chown=xg3user:xg3user . /app/
 
+# Make startup script executable (must be done as root before user switch)
+RUN chmod +x /app/startup.sh
+
 # Switch to non-root user
 USER xg3user
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+# Health check — longer start-period to allow migration time
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
 
 # Expose port
@@ -53,5 +56,5 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app
 
-# Start server
-CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 2 --log-level info --access-log
+# Start: run Alembic migrations then launch API
+CMD ["/app/startup.sh"]
