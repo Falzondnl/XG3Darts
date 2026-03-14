@@ -20,6 +20,7 @@ from fastapi.responses import JSONResponse
 
 from app.config import settings
 from app.routes import (
+    events,
     live,
     monitoring,
     outrights,
@@ -172,6 +173,7 @@ def create_app() -> FastAPI:
     # Routers
     api_prefix = "/api/v1/darts"
     app.include_router(prematch.router, prefix=api_prefix, tags=["Pre-Match"])
+    app.include_router(events.router, prefix=api_prefix, tags=["Events"])
     app.include_router(live.router, prefix=api_prefix, tags=["Live"])
     app.include_router(outrights.router, prefix=api_prefix, tags=["Outrights"])
     app.include_router(sgp.router, prefix=api_prefix, tags=["SGP"])
