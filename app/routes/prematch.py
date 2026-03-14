@@ -900,3 +900,63 @@ async def smart_price(
             "elo": "pdc_mens_pool",
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# GET /prematch/player-search — search players by name
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/prematch/player-search",
+    summary="Search players by name (returns IDs for smart-price)",
+    response_model=dict,
+    tags=["Pre-Match"],
+)
+async def search_players_for_pricing(
+    q: str,
+    limit: int = 20,
+    session: AsyncSession = Depends(get_session_dependency),
+) -> dict[str, Any]:
+    """
+    Search players by name. Returns player IDs suitable for use in
+    /prematch/smart-price.
+    """
+    from sqlalchemy import text as sql_text
+
+    result = await session.execute(
+        sql_text("""
+            SELECT p.id, p.first_name, p.last_name, p.nickname,
+                   p.pdc_ranking, p.dartsorakel_3da, p.dartsorakel_rank,
+                   p.country_code, p.pdc_id,
+                   COALESCE(e.rating_after, 1500.0) AS elo_rating
+            FROM darts_players p
+            LEFT JOIN darts_elo_ratings e
+                ON e.player_id = p.id AND e.pool = 'pdc_mens'
+            WHERE p.first_name ILIKE :pattern
+               OR p.last_name  ILIKE :pattern
+               OR p.nickname   ILIKE :pattern
+               OR (p.first_name || ' ' || p.last_name) ILIKE :pattern
+            ORDER BY p.pdc_ranking ASC NULLS LAST
+            LIMIT :limit
+        """),
+        {"pattern": f"%{q}%", "limit": min(limit, 50)},
+    )
+    rows = result.fetchall()
+    return {
+        "query": q,
+        "count": len(rows),
+        "players": [
+            {
+                "player_id": row[0],
+                "name": f"{row[1] or ''} {row[2] or ''}".strip(),
+                "nickname": row[3],
+                "pdc_ranking": row[4],
+                "dartsorakel_3da": row[5],
+                "dartsorakel_rank": row[6],
+                "country_code": row[7],
+                "pdc_id": row[8],
+                "elo_rating": round(float(row[9]), 1) if row[9] else None,
+            }
+            for row in rows
+        ],
+    }
