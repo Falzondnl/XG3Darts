@@ -15,8 +15,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies into a separate prefix
-COPY requirements.txt .
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+# Use requirements-prod.txt (lean set) to keep build time under 5 min.
+# Full requirements.txt (with torch, pymc, etc.) is for local training only.
+COPY requirements-prod.txt .
+RUN pip install --no-cache-dir --prefix=/install -r requirements-prod.txt
 
 # ---- Stage 2: Runtime ----
 FROM python:3.11-slim AS runtime
