@@ -85,8 +85,8 @@ class Settings(BaseSettings):
         default=False,
         description="Enable SQLAlchemy query echo (dev only)",
     )
-    DB_POOL_SIZE: int = Field(default=10, ge=1, le=100)
-    DB_MAX_OVERFLOW: int = Field(default=20, ge=0, le=100)
+    DB_POOL_SIZE: int = Field(default=3, ge=1, le=100)
+    DB_MAX_OVERFLOW: int = Field(default=5, ge=0, le=100)
 
     # ------------------------------------------------------------------ #
     # Redis

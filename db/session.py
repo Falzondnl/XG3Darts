@@ -35,8 +35,12 @@ def _build_engine() -> AsyncEngine:
         pool_size=settings.DB_POOL_SIZE,
         max_overflow=settings.DB_MAX_OVERFLOW,
         pool_pre_ping=True,
-        pool_recycle=3600,
-        connect_args={"timeout": 30},
+        pool_recycle=1800,
+        pool_timeout=20,
+        connect_args={
+            "timeout": 10,           # asyncpg TCP connect timeout (seconds)
+            "command_timeout": 30,   # per-query timeout
+        },
     )
 
 
