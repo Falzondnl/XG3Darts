@@ -137,6 +137,16 @@ class Settings(BaseSettings):
         description="Enable GPU-accelerated tournament simulation",
     )
 
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def fix_database_url(cls, v: str) -> str:
+        """Convert postgresql:// → postgresql+asyncpg:// for async engine."""
+        if v.startswith("postgres://"):
+            v = v.replace("postgres://", "postgresql+asyncpg://", 1)
+        elif v.startswith("postgresql://"):
+            v = v.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return v
+
     @field_validator("ENVIRONMENT")
     @classmethod
     def validate_environment(cls, v: str) -> str:
