@@ -367,6 +367,61 @@ async def get_player_outright_odds(player_name: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# GET /outrights/catalog — must be BEFORE /{competition_id} to avoid shadowing
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/outrights/catalog",
+    summary="List all active outright markets",
+    tags=["Outrights"],
+)
+async def list_outright_markets_early() -> dict[str, Any]:
+    """Return available outright markets for all upcoming tournaments."""
+    return {
+        "markets": [
+            {
+                "competition_id": "pdc_pl_2026",
+                "name": "PDC Premier League 2026",
+                "status": "active",
+                "format_code": "PDC_PL",
+                "players": 8,
+                "prize_fund": 1000000,
+                "simulate_url": "/api/v1/darts/outrights/simulate",
+                "quick_price_url": "/api/v1/darts/outrights/pdc_pl_2026/quick",
+            },
+            {
+                "competition_id": "pdc_wc_2026_27",
+                "name": "PDC World Championship 2026/27",
+                "status": "upcoming",
+                "format_code": "PDC_WC",
+                "players": 96,
+                "prize_fund": 3000000,
+                "simulate_url": "/api/v1/darts/outrights/simulate",
+                "quick_price_url": "/api/v1/darts/outrights/pdc_wc_2026_27/quick",
+            },
+            {
+                "competition_id": "pdc_gs_2026",
+                "name": "PDC Grand Slam of Darts 2026",
+                "status": "upcoming",
+                "format_code": "PDC_GS",
+                "players": 32,
+                "prize_fund": 650000,
+                "simulate_url": "/api/v1/darts/outrights/simulate",
+            },
+            {
+                "competition_id": "pdc_pcf_2026",
+                "name": "PDC Players Championship Finals 2026",
+                "status": "upcoming",
+                "format_code": "PDC_PCF",
+                "players": 64,
+                "prize_fund": 750000,
+                "simulate_url": "/api/v1/darts/outrights/simulate",
+            },
+        ]
+    }
+
+
+# ---------------------------------------------------------------------------
 # GET /outrights/{competition_id}
 # ---------------------------------------------------------------------------
 
