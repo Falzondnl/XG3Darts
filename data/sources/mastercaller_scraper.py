@@ -81,7 +81,9 @@ async def _fetch(
                 allow_redirects=True,
             ) as resp:
                 if resp.status == 200:
-                    return await resp.text()
+                    raw = await resp.read()
+                    encoding = resp.charset or "utf-8"
+                    return raw.decode(encoding, errors="replace")
                 if resp.status in (404, 410):
                     logger.warning("mastercaller_not_found", url=url, status=resp.status)
                     return None
