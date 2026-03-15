@@ -221,7 +221,7 @@ def test_live_state_stale_custom_threshold(engine: DartsLiveEngine) -> None:
 
 def test_live_state_stale_naive_datetime() -> None:
     """A naive (timezone-unaware) last_updated datetime is handled gracefully."""
-    naive_time = datetime.utcnow() - timedelta(seconds=60)  # naive UTC
+    naive_time = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=60)  # naive UTC
     state = make_state(last_updated=naive_time)
     # Should not raise; staleness should be detected
     result = state.is_stale(max_age_ms=30_000)

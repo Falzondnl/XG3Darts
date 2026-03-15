@@ -115,12 +115,12 @@ class TestDartsSGPCorrelationEstimator:
         assert np.all(eigvals >= -1e-7), (
             f"Prior correlation matrix is not PSD. Min eigenvalue = {min(eigvals):.8f}"
         )
-        assert matrix_prior.shape == (7, 7)
+        assert matrix_prior.shape == (15, 15)
         np.testing.assert_allclose(np.diag(matrix_prior), 1.0, atol=1e-8)
 
         # With simulated empirical data (1000 samples)
         rng = np.random.default_rng(42)
-        empirical = np.eye(7) * 0.8 + 0.2 * DARTS_GLOBAL_CORRELATION_PRIOR
+        empirical = np.eye(15) * 0.8 + 0.2 * DARTS_GLOBAL_CORRELATION_PRIOR
         np.fill_diagonal(empirical, 1.0)
         empirical = (empirical + empirical.T) / 2.0
 
@@ -145,7 +145,7 @@ class TestDartsSGPCorrelationEstimator:
         prior = DARTS_GLOBAL_CORRELATION_PRIOR.copy()
 
         # Construct an empirical matrix (identity-like)
-        empirical = np.eye(7)
+        empirical = np.eye(15)
 
         # Blend with alpha=0.5 (half samples of min)
         blended = self.estimator._shrink_toward_prior(
@@ -157,8 +157,8 @@ class TestDartsSGPCorrelationEstimator:
         # Off-diagonal elements should be between prior and empirical
         # For empirical=I: off-diagonal = 0; prior has non-zero off-diagonal
         # Blended should have off-diagonal = 0.5 * 0 + 0.5 * prior_off_diag
-        for i in range(7):
-            for j in range(7):
+        for i in range(15):
+            for j in range(15):
                 if i != j:
                     expected = 0.5 * 0.0 + 0.5 * prior[i, j]
                     assert abs(blended[i, j] - expected) < 1e-10, (
@@ -185,7 +185,7 @@ class TestDartsSGPCorrelationEstimator:
     def test_wrong_shape_empirical_raises(self):
         """Wrong-shape empirical matrix should raise DartsEngineError."""
         bad_matrix = np.eye(5)
-        with pytest.raises(DartsEngineError, match="7x7"):
+        with pytest.raises(DartsEngineError, match=r"\(15, 15\)"):
             self.estimator.estimate_for_competition(
                 competition_code="PDC_WC",
                 empirical_spearman=bad_matrix,
