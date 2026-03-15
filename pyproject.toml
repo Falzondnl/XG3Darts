@@ -18,6 +18,7 @@ python_functions = ["test_*"]
 addopts = [
     "--tb=short",
     "-v",
+    "--import-mode=importlib",
 ]
 
 [tool.ruff]
