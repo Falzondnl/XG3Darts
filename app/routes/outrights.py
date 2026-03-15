@@ -400,6 +400,16 @@ async def list_outright_markets_early() -> dict[str, Any]:
                 "quick_price_url": "/api/v1/darts/outrights/pdc_wc_2026_27/quick",
             },
             {
+                "competition_id": "pdc_wm_2026",
+                "name": "PDC World Matchplay 2026",
+                "status": "upcoming",
+                "format_code": "PDC_WM",
+                "players": 32,
+                "prize_fund": 700000,
+                "simulate_url": "/api/v1/darts/outrights/simulate",
+                "quick_price_url": "/api/v1/darts/outrights/pdc_wm_2026/quick",
+            },
+            {
                 "competition_id": "pdc_gs_2026",
                 "name": "PDC Grand Slam of Darts 2026",
                 "status": "upcoming",
@@ -407,6 +417,7 @@ async def list_outright_markets_early() -> dict[str, Any]:
                 "players": 32,
                 "prize_fund": 650000,
                 "simulate_url": "/api/v1/darts/outrights/simulate",
+                "quick_price_url": "/api/v1/darts/outrights/pdc_gs_2026/quick",
             },
             {
                 "competition_id": "pdc_pcf_2026",
@@ -515,6 +526,78 @@ async def update_field(request: UpdateFieldRequest) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 # 2026 PDC Premier League participants with real ELO/3DA estimates
+# World Matchplay 2026 — top 32 PDC ranked players (Summer 2026 draw)
+_PDC_WM_2026_FIELD = [
+    {"player_id": "luke-littler",        "elo_rating": 2450.0, "three_da": 104.2},
+    {"player_id": "michael-van-gerwen",  "elo_rating": 2380.0, "three_da": 98.7},
+    {"player_id": "luke-humphries",      "elo_rating": 2310.0, "three_da": 96.1},
+    {"player_id": "michael-smith",       "elo_rating": 2180.0, "three_da": 92.4},
+    {"player_id": "gerwyn-price",        "elo_rating": 2140.0, "three_da": 91.8},
+    {"player_id": "peter-wright",        "elo_rating": 2090.0, "three_da": 88.5},
+    {"player_id": "stephen-bunting",     "elo_rating": 2060.0, "three_da": 87.3},
+    {"player_id": "chris-dobey",         "elo_rating": 2010.0, "three_da": 86.1},
+    {"player_id": "jonny-clayton",       "elo_rating": 1980.0, "three_da": 84.9},
+    {"player_id": "dave-chisnall",       "elo_rating": 1950.0, "three_da": 83.5},
+    {"player_id": "nathan-aspinall",     "elo_rating": 1940.0, "three_da": 83.1},
+    {"player_id": "jose-de-sousa",       "elo_rating": 1910.0, "three_da": 82.4},
+    {"player_id": "callan-rydz",         "elo_rating": 1870.0, "three_da": 80.7},
+    {"player_id": "ross-smith",          "elo_rating": 1840.0, "three_da": 79.8},
+    {"player_id": "gary-anderson",       "elo_rating": 1820.0, "three_da": 79.2},
+    {"player_id": "damon-heta",          "elo_rating": 1800.0, "three_da": 78.5},
+    {"player_id": "dimitri-van-den-bergh","elo_rating": 1780.0, "three_da": 78.0},
+    {"player_id": "rob-cross",           "elo_rating": 1760.0, "three_da": 77.4},
+    {"player_id": "ryan-searle",         "elo_rating": 1740.0, "three_da": 76.9},
+    {"player_id": "brendan-dolan",       "elo_rating": 1720.0, "three_da": 76.3},
+    {"player_id": "scott-williams",      "elo_rating": 1700.0, "three_da": 75.8},
+    {"player_id": "danny-noppert",       "elo_rating": 1680.0, "three_da": 75.2},
+    {"player_id": "ian-white",           "elo_rating": 1660.0, "three_da": 74.7},
+    {"player_id": "martin-schindler",    "elo_rating": 1640.0, "three_da": 74.1},
+    {"player_id": "mike-de-decker",      "elo_rating": 1620.0, "three_da": 73.6},
+    {"player_id": "joe-cullen",          "elo_rating": 1600.0, "three_da": 73.0},
+    {"player_id": "andrew-gilding",      "elo_rating": 1580.0, "three_da": 72.5},
+    {"player_id": "ryan-meikle",         "elo_rating": 1560.0, "three_da": 72.0},
+    {"player_id": "dylan-slevin",        "elo_rating": 1540.0, "three_da": 71.4},
+    {"player_id": "luke-woodhouse",      "elo_rating": 1520.0, "three_da": 70.9},
+    {"player_id": "ritchie-edhouse",     "elo_rating": 1500.0, "three_da": 70.3},
+    {"player_id": "daryl-gurney",        "elo_rating": 1480.0, "three_da": 69.8},
+]
+
+# Grand Slam of Darts 2026 — 16 PDC Tour card holders + qualifiers
+_PDC_GS_2026_FIELD = [
+    {"player_id": "luke-littler",        "elo_rating": 2450.0, "three_da": 104.2},
+    {"player_id": "michael-van-gerwen",  "elo_rating": 2380.0, "three_da": 98.7},
+    {"player_id": "luke-humphries",      "elo_rating": 2310.0, "three_da": 96.1},
+    {"player_id": "michael-smith",       "elo_rating": 2180.0, "three_da": 92.4},
+    {"player_id": "gerwyn-price",        "elo_rating": 2140.0, "three_da": 91.8},
+    {"player_id": "peter-wright",        "elo_rating": 2090.0, "three_da": 88.5},
+    {"player_id": "stephen-bunting",     "elo_rating": 2060.0, "three_da": 87.3},
+    {"player_id": "chris-dobey",         "elo_rating": 2010.0, "three_da": 86.1},
+    {"player_id": "jonny-clayton",       "elo_rating": 1980.0, "three_da": 84.9},
+    {"player_id": "nathan-aspinall",     "elo_rating": 1940.0, "three_da": 83.1},
+    {"player_id": "jose-de-sousa",       "elo_rating": 1910.0, "three_da": 82.4},
+    {"player_id": "ross-smith",          "elo_rating": 1840.0, "three_da": 79.8},
+    {"player_id": "gary-anderson",       "elo_rating": 1820.0, "three_da": 79.2},
+    {"player_id": "damon-heta",          "elo_rating": 1800.0, "three_da": 78.5},
+    {"player_id": "dimitri-van-den-bergh","elo_rating": 1780.0, "three_da": 78.0},
+    {"player_id": "rob-cross",           "elo_rating": 1760.0, "three_da": 77.4},
+    {"player_id": "danny-noppert",       "elo_rating": 1680.0, "three_da": 75.2},
+    {"player_id": "martin-schindler",    "elo_rating": 1640.0, "three_da": 74.1},
+    {"player_id": "mike-de-decker",      "elo_rating": 1620.0, "three_da": 73.6},
+    {"player_id": "joe-cullen",          "elo_rating": 1600.0, "three_da": 73.0},
+    {"player_id": "andrew-gilding",      "elo_rating": 1580.0, "three_da": 72.5},
+    {"player_id": "beau-greaves",        "elo_rating": 1560.0, "three_da": 72.0},
+    {"player_id": "fallon-sherrock",     "elo_rating": 1500.0, "three_da": 70.3},
+    {"player_id": "kim-huybrechts",      "elo_rating": 1520.0, "three_da": 70.9},
+    {"player_id": "brendan-dolan",       "elo_rating": 1720.0, "three_da": 76.3},
+    {"player_id": "callan-rydz",         "elo_rating": 1870.0, "three_da": 80.7},
+    {"player_id": "dave-chisnall",       "elo_rating": 1950.0, "three_da": 83.5},
+    {"player_id": "ian-white",           "elo_rating": 1660.0, "three_da": 74.7},
+    {"player_id": "ryan-searle",         "elo_rating": 1740.0, "three_da": 76.9},
+    {"player_id": "scott-williams",      "elo_rating": 1700.0, "three_da": 75.8},
+    {"player_id": "ritchie-edhouse",     "elo_rating": 1500.0, "three_da": 70.3},
+    {"player_id": "daryl-gurney",        "elo_rating": 1480.0, "three_da": 69.8},
+]
+
 _PDC_PL_2026_FIELD = [
     {"player_id": "luke-littler",     "elo_rating": 2450.0, "three_da": 104.2},
     {"player_id": "michael-van-gerwen", "elo_rating": 2380.0, "three_da": 98.7},
@@ -582,13 +665,24 @@ async def list_outright_markets() -> dict[str, Any]:
                 "quick_price_url": "/api/v1/darts/outrights/pdc_wc_2026_27/quick",
             },
             {
+                "competition_id": "pdc_wm_2026",
+                "name": "PDC World Matchplay 2026",
+                "status": "upcoming",
+                "format_code": "PDC_WM",
+                "players": len(_PDC_WM_2026_FIELD),
+                "prize_fund": 700000,
+                "simulate_url": "/api/v1/darts/outrights/simulate",
+                "quick_price_url": "/api/v1/darts/outrights/pdc_wm_2026/quick",
+            },
+            {
                 "competition_id": "pdc_gs_2026",
                 "name": "PDC Grand Slam of Darts 2026",
                 "status": "upcoming",
                 "format_code": "PDC_GS",
-                "players": 32,
+                "players": len(_PDC_GS_2026_FIELD),
                 "prize_fund": 650000,
                 "simulate_url": "/api/v1/darts/outrights/simulate",
+                "quick_price_url": "/api/v1/darts/outrights/pdc_gs_2026/quick",
             },
             {
                 "competition_id": "pdc_pcf_2026",
@@ -624,6 +718,8 @@ async def quick_outright_price(
     field_map = {
         "pdc_pl_2026":    ("PDC_PL", _PDC_PL_2026_FIELD),
         "pdc_wc_2026_27": ("PDC_WC", _PDC_WC_2026_FIELD),
+        "pdc_wm_2026":    ("PDC_WM", _PDC_WM_2026_FIELD),
+        "pdc_gs_2026":    ("PDC_GS", _PDC_GS_2026_FIELD),
     }
     if competition_id not in field_map:
         raise HTTPException(
