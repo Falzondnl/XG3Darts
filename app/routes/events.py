@@ -453,30 +453,46 @@ async def fixture_feed(
         if status and estatus != status:
             continue
 
-        for m in event.get("matches", []):
+        for idx, m in enumerate(event.get("matches", [])):
+            # Build a stable fixture_id
+            fixture_id = f"{event.get('event_id', 'evt')}_{idx}"
+            # Parse score
+            sp1 = m.get("score_p1")
+            sp2 = m.get("score_p2")
+            score_obj = None
+            if sp1 is not None and sp2 is not None:
+                try:
+                    score_obj = {"p1": int(sp1), "p2": int(sp2)}
+                except (ValueError, TypeError):
+                    pass
+            # Derive fixture status
+            winner = m.get("winner")
+            if estatus == "live":
+                fix_status = "live"
+            elif winner:
+                fix_status = "completed"
+            else:
+                fix_status = "scheduled"
+
             all_matches.append({
-                "event_id": event.get("event_id"),
-                "event_name": event.get("event_name"),
+                "fixture_id": fixture_id,
                 "competition_code": ecode,
-                "event_date": event.get("event_date"),
-                "status": estatus,
-                "round": m.get("round"),
+                "competition_name": event.get("event_name", ecode),
+                "round_name": m.get("round", ""),
+                "scheduled_time": event.get("event_date", ""),
+                "status": fix_status,
                 "player1": {
-                    "name": m.get("player1_name"),
+                    "id": m.get("player1_name", "").lower().replace(" ", "-"),
+                    "name": m.get("player1_name", ""),
                     "three_da": m.get("player1_3da"),
                 },
                 "player2": {
-                    "name": m.get("player2_name"),
+                    "id": m.get("player2_name", "").lower().replace(" ", "-"),
+                    "name": m.get("player2_name", ""),
                     "three_da": m.get("player2_3da"),
                 },
-                "score": f"{m.get('score_p1', 0)}-{m.get('score_p2', 0)}"
-                         if m.get("score_p1") is not None else None,
-                "winner": m.get("winner"),
-                "_links": {
-                    "smart_price": _service_url("/prematch/smart-price"),
-                    "first_leg": _service_url("/prematch/first-leg"),
-                    "multi_totals": _service_url("/prematch/multi-totals"),
-                },
+                "score": score_obj,
+                "winner": winner,
             })
 
     total = len(all_matches)
@@ -493,6 +509,7 @@ async def fixture_feed(
 
 # ---------------------------------------------------------------------------
 # GET /events/fixtures/competitions — List all unique competition codes
+# IMPORTANT: static routes must be before dynamic /{fixture_id}
 # ---------------------------------------------------------------------------
 
 @router.get(
@@ -516,4 +533,84 @@ async def list_fixture_competitions() -> dict[str, Any]:
         "total_events": len(events),
         "total_matches": sum(c["matches"] for c in comps.values()),
         "competitions": sorted(comps.values(), key=lambda x: -x["matches"]),
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /events/fixtures/{fixture_id} — Single fixture lookup
+# IMPORTANT: defined AFTER all static /events/fixtures/* routes
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/events/fixtures/{fixture_id}",
+    summary="Get a single fixture by ID",
+    tags=["Events"],
+)
+async def get_fixture(fixture_id: str) -> dict[str, Any]:
+    """
+    Look up a single fixture by its fixture_id (format: {event_id}_{match_index}).
+    Returns the fixture item in the same format as the feed.
+    """
+    # Parse fixture_id: last segment after last underscore is the index
+    # Format: pdc_challenge_tour_1_2026_42 → event_id = pdc_challenge_tour_1_2026, idx = 42
+    parts = fixture_id.rsplit("_", 1)
+    if len(parts) != 2:
+        raise HTTPException(status_code=404, detail=f"Invalid fixture_id: {fixture_id!r}")
+
+    event_id_key, idx_str = parts
+    try:
+        idx = int(idx_str)
+    except ValueError:
+        raise HTTPException(status_code=404, detail=f"Invalid fixture_id index: {idx_str!r}")
+
+    data = _load_fixtures()
+    events = data.get("events", [])
+    event = next((e for e in events if e.get("event_id") == event_id_key), None)
+    if event is None:
+        raise HTTPException(status_code=404, detail=f"Event {event_id_key!r} not found")
+
+    matches = event.get("matches", [])
+    if idx < 0 or idx >= len(matches):
+        raise HTTPException(status_code=404, detail=f"Match index {idx} out of range for event {event_id_key!r}")
+
+    m = matches[idx]
+    ecode = event.get("competition_code", "")
+    estatus = event.get("status", "completed")
+    winner = m.get("winner")
+
+    sp1 = m.get("score_p1")
+    sp2 = m.get("score_p2")
+    score_obj = None
+    if sp1 is not None and sp2 is not None:
+        try:
+            score_obj = {"p1": int(sp1), "p2": int(sp2)}
+        except (ValueError, TypeError):
+            pass
+
+    if estatus == "live":
+        fix_status = "live"
+    elif winner:
+        fix_status = "completed"
+    else:
+        fix_status = "scheduled"
+
+    return {
+        "fixture_id": fixture_id,
+        "competition_code": ecode,
+        "competition_name": event.get("event_name", ecode),
+        "round_name": m.get("round", ""),
+        "scheduled_time": event.get("event_date", ""),
+        "status": fix_status,
+        "player1": {
+            "id": m.get("player1_name", "").lower().replace(" ", "-"),
+            "name": m.get("player1_name", ""),
+            "three_da": m.get("player1_3da"),
+        },
+        "player2": {
+            "id": m.get("player2_name", "").lower().replace(" ", "-"),
+            "name": m.get("player2_name", ""),
+            "three_da": m.get("player2_3da"),
+        },
+        "score": score_obj,
+        "winner": winner,
     }
