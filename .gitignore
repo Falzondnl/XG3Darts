@@ -15,6 +15,10 @@ env/
 *.joblib
 *.h5
 *.onnx
+# Un-ignore production model artifacts required at runtime on Railway
+# (must come AFTER *.pkl and the directory must not be ignored entirely)
+!models/saved/r0_model.pkl
+!models/saved/r1_model_from_raw.pkl
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
@@ -26,5 +30,5 @@ coverage.xml
 node_modules/
 .DS_Store
 Thumbs.db
-models/saved/
+# models/saved/ intentionally NOT ignored — negation rules above handle pkl files
 data/cache/
