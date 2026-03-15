@@ -34,6 +34,25 @@ logger = structlog.get_logger(__name__)
 router = APIRouter()
 
 # ---------------------------------------------------------------------------
+# 2026 fixtures data — loaded once at module import
+# ---------------------------------------------------------------------------
+
+_FIXTURES_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "fixtures_2026.json"
+_FIXTURES_2026: dict = {}
+
+
+def _load_fixtures() -> dict:
+    global _FIXTURES_2026
+    if not _FIXTURES_2026:
+        try:
+            with open(_FIXTURES_PATH, encoding="utf-8") as f:
+                _FIXTURES_2026 = json.load(f)
+        except Exception as exc:
+            logger.warning("fixtures_2026_load_failed", error=str(exc))
+            _FIXTURES_2026 = {"events": []}
+    return _FIXTURES_2026
+
+# ---------------------------------------------------------------------------
 # Static 2025-26 PDC calendar — tier-1 tournament coverage
 # ---------------------------------------------------------------------------
 
@@ -382,4 +401,119 @@ async def price_all_fixtures(
         "priced_count": len(priced),
         "base_margin": request.base_margin,
         "matches": priced,
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /events/fixtures/feed — Flat fixture feed for all 2026 events
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/events/fixtures/feed",
+    summary="All 2026 season fixtures feed",
+    tags=["Events"],
+)
+async def fixture_feed(
+    competition_code: Optional[str] = Query(
+        None,
+        description="Filter by competition code, e.g. PDC_PC, PDC_PL",
+    ),
+    status: Optional[str] = Query(
+        None,
+        description="Filter by status: completed | upcoming | live",
+    ),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+) -> dict[str, Any]:
+    """
+    Return a flat feed of all 2026 season fixtures from the parsed DartsDatabase CSV data.
+
+    This endpoint exposes 4,000+ matches across 37 events including:
+    - PDC Challenge Tour (6 events, 2,000+ matches)
+    - PDC Premier League (weeks 1-4+)
+    - PDC Players Championships
+    - PDC Women's Series
+    - World Series Masters events
+    - European Tour / Scottish Open / Dutch Open
+    - WDF events
+
+    Each fixture includes player names, 3DA ratings, score, and winner.
+    Suitable for populating a betting platform fixture list.
+    """
+    data = _load_fixtures()
+    events = data.get("events", [])
+
+    all_matches = []
+    for event in events:
+        ecode = event.get("competition_code", "")
+        estatus = event.get("status", "completed")
+
+        if competition_code and ecode.upper() != competition_code.upper():
+            continue
+        if status and estatus != status:
+            continue
+
+        for m in event.get("matches", []):
+            all_matches.append({
+                "event_id": event.get("event_id"),
+                "event_name": event.get("event_name"),
+                "competition_code": ecode,
+                "event_date": event.get("event_date"),
+                "status": estatus,
+                "round": m.get("round"),
+                "player1": {
+                    "name": m.get("player1_name"),
+                    "three_da": m.get("player1_3da"),
+                },
+                "player2": {
+                    "name": m.get("player2_name"),
+                    "three_da": m.get("player2_3da"),
+                },
+                "score": f"{m.get('score_p1', 0)}-{m.get('score_p2', 0)}"
+                         if m.get("score_p1") is not None else None,
+                "winner": m.get("winner"),
+                "_links": {
+                    "smart_price": _service_url("/prematch/smart-price"),
+                    "first_leg": _service_url("/prematch/first-leg"),
+                    "multi_totals": _service_url("/prematch/multi-totals"),
+                },
+            })
+
+    total = len(all_matches)
+    page = all_matches[offset: offset + limit]
+
+    return {
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "count": len(page),
+        "fixtures": page,
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /events/fixtures/competitions — List all unique competition codes
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/events/fixtures/competitions",
+    summary="List all competition codes in the fixture feed",
+    tags=["Events"],
+)
+async def list_fixture_competitions() -> dict[str, Any]:
+    """Return all unique competition codes and event counts in fixtures_2026.json."""
+    data = _load_fixtures()
+    events = data.get("events", [])
+    comps: dict[str, dict] = {}
+    for ev in events:
+        code = ev.get("competition_code", "UNKNOWN")
+        if code not in comps:
+            comps[code] = {"competition_code": code, "events": 0, "matches": 0}
+        comps[code]["events"] += 1
+        comps[code]["matches"] += len(ev.get("matches", []))
+    return {
+        "total_competitions": len(comps),
+        "total_events": len(events),
+        "total_matches": sum(c["matches"] for c in comps.values()),
+        "competitions": sorted(comps.values(), key=lambda x: -x["matches"]),
     }
