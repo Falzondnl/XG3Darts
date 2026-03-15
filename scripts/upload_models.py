@@ -112,7 +112,11 @@ def main() -> None:
         if args.model in ("r0", "all"):
             upload_model(conn, "r0_logit", save_dir / "r0_model.pkl")
         if args.model in ("r1", "all"):
-            upload_model(conn, "r1_lgbm", save_dir / "r1_model.pkl")
+            # r1_model_from_raw.pkl: sequential ELO, no leakage (AUC=0.8097)
+            # replaces old leaky r1_model.pkl (AUC=0.9746 was due to static ELO snapshot)
+            r1_raw = save_dir / "r1_model_from_raw.pkl"
+            r1_old = save_dir / "r1_model.pkl"
+            upload_model(conn, "r1_lgbm", r1_raw if r1_raw.exists() else r1_old)
     finally:
         conn.close()
 

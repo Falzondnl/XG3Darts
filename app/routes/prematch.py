@@ -1026,37 +1026,52 @@ async def smart_price(
         p1_three_da = request.fallback_3da
         p2_three_da = request.fallback_3da
 
-    # --- R0 ML model blend (if model is available) ---
+    # --- ML model blend: try R1 (file-based) then fall back to R0 (DB) ---
     ml_p1_win: Optional[float] = None
     ml_source = "unavailable"
     try:
-        from models.loader import model_store
-        import numpy as np
-        r0 = model_store.get("r0_logit")
-        if r0 is not None:
-            fmt = request.competition_code
-            year = 2026
-            feat = np.array([[
-                p1_elo - p2_elo,
-                p1_elo, p2_elo,
-                p1_three_da - p2_three_da,
-                p1_three_da, p2_three_da,
-                p2_rank - p1_rank,
-                min(p1_rank, 300) / 300.0,
-                min(p2_rank, 300) / 300.0,
-                1.0 if (p1_country and p1_country == p2_country) else 0.0,
-                (year - 2000) / 30.0,
-                1.0 if fmt.startswith("PDC_WC") else 0.0,
-                1.0 if fmt == "PDC_PL" else 0.0,
-                1.0 if not (fmt.startswith("PDC_WC") or fmt == "PDC_PL") else 0.0,
-            ]], dtype=np.float32)
-            scaler = r0["scaler"]
-            model = r0["model"]
-            feat_s = scaler.transform(feat)
-            ml_p1_win = float(model.predict_proba(feat_s)[0, 1])
-            ml_source = "r0_logit"
+        from models.r1_file_predictor import r1_file_predictor
+        r1_prob = r1_file_predictor.predict(
+            p1_elo=p1_elo,
+            p2_elo=p2_elo,
+            p1_3da=p1_three_da,
+            p2_3da=p2_three_da,
+        )
+        if r1_prob is not None:
+            ml_p1_win = r1_prob
+            ml_source = "r1_file"
     except Exception:
-        pass  # model unavailable — use Markov only
+        pass
+
+    if ml_p1_win is None:
+        try:
+            from models.loader import model_store
+            import numpy as np
+            r0 = model_store.get("r0_logit")
+            if r0 is not None:
+                fmt = request.competition_code
+                year = 2026
+                feat = np.array([[
+                    p1_elo - p2_elo,
+                    p1_elo, p2_elo,
+                    p1_three_da - p2_three_da,
+                    p1_three_da, p2_three_da,
+                    p2_rank - p1_rank,
+                    min(p1_rank, 300) / 300.0,
+                    min(p2_rank, 300) / 300.0,
+                    1.0 if (p1_country and p1_country == p2_country) else 0.0,
+                    (year - 2000) / 30.0,
+                    1.0 if fmt.startswith("PDC_WC") else 0.0,
+                    1.0 if fmt == "PDC_PL" else 0.0,
+                    1.0 if not (fmt.startswith("PDC_WC") or fmt == "PDC_PL") else 0.0,
+                ]], dtype=np.float32)
+                scaler = r0["scaler"]
+                model = r0["model"]
+                feat_s = scaler.transform(feat)
+                ml_p1_win = float(model.predict_proba(feat_s)[0, 1])
+                ml_source = "r0_logit"
+        except Exception:
+            pass  # model unavailable — use Markov only
 
     # Build internal request
     inner = MatchPriceRequest(
@@ -1089,12 +1104,12 @@ async def smart_price(
     markov_p1_win = match_result.p1_win
     markov_p2_win = match_result.p2_win
 
-    # Blend: 60% Markov (format-aware), 40% R0 ML (ELO signal)
+    # Blend: 60% Markov (format-aware), 40% ML (R1 file or R0 fallback)
     if ml_p1_win is not None:
         blend_p1 = 0.60 * markov_p1_win + 0.40 * ml_p1_win
         blend_p2 = 1.0 - blend_p1
         final_p1, final_p2 = blend_p1, blend_p2
-        pricing_model = "markov_r0_blend"
+        pricing_model = f"markov_{ml_source}_blend"
     else:
         final_p1, final_p2 = markov_p1_win, markov_p2_win
         pricing_model = "markov_only"
