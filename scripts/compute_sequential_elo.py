@@ -113,9 +113,11 @@ def main() -> None:
                         help="Delete existing ELO rows before recomputing")
     parser.add_argument("--dry-run", action="store_true",
                         help="Compute only, do not write to DB")
+    parser.add_argument("--db-url", default=None,
+                        help="Override DATABASE_URL (e.g. public proxy for local runs)")
     args = parser.parse_args()
 
-    db_url = _db_url_sync(settings.DATABASE_URL)
+    db_url = _db_url_sync(args.db_url or settings.DATABASE_URL)
     conn = psycopg2.connect(db_url, connect_timeout=30)
 
     if args.reset and not args.dry_run:

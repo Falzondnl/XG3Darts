@@ -115,21 +115,35 @@ async def ingest_dartsorakel_seed(
         else:
             # Create new player (unmatched — from DartsOrakel only)
             player_uuid = str(uuid.uuid4())
-            new_player = DartsPlayer(
-                id=player_uuid,
-                first_name=player_record.first_name,
-                last_name=player_record.last_name,
-                slug=slug,
-                dartsorakel_key=player_key,
-                dartsorakel_3da=three_da,
-                dartsorakel_rank=rank,
-                country_code=entry.get("country"),
-                source_confidence=0.85,
-                primary_source="dartsorakel",
-                gdpr_anonymized=False,
-            )
             if not dry_run:
-                session.add(new_player)
+                result = await session.execute(
+                    text(
+                        "INSERT INTO darts_players "
+                        "(id, first_name, last_name, slug, dartsorakel_key, "
+                        " dartsorakel_3da, dartsorakel_rank, country_code, "
+                        " source_confidence, primary_source, gdpr_anonymized) "
+                        "VALUES (:id, :fn, :ln, :slug, :dk, :da, :rk, :cc, "
+                        "        0.85, 'dartsorakel', false) "
+                        "ON CONFLICT (slug) DO UPDATE SET "
+                        "  dartsorakel_key = EXCLUDED.dartsorakel_key, "
+                        "  dartsorakel_3da = EXCLUDED.dartsorakel_3da, "
+                        "  dartsorakel_rank = EXCLUDED.dartsorakel_rank "
+                        "RETURNING id"
+                    ),
+                    {
+                        "id": player_uuid,
+                        "fn": player_record.first_name,
+                        "ln": player_record.last_name,
+                        "slug": slug,
+                        "dk": player_key,
+                        "da": three_da,
+                        "rk": rank,
+                        "cc": entry.get("country"),
+                    },
+                )
+                row = result.fetchone()
+                if row:
+                    player_uuid = str(row[0])
             inserted += 1
 
         key_to_uuid[str(player_key)] = player_uuid
@@ -146,9 +160,8 @@ async def ingest_dartsorakel_seed(
             )
             session.add(stats)
 
-        if (inserted + updated) % 500 == 0:
-            if not dry_run:
-                await session.flush()
+        if (inserted + updated) % 500 == 0 and not dry_run:
+            await session.flush()
 
     if not dry_run:
         await session.flush()

@@ -1,7 +1,7 @@
 """003 — ML model artifact storage table
 
 Revision ID: 003
-Revises: 002
+Revises: 002_unique_source_ids
 Create Date: 2026-03-14
 """
 from alembic import op
@@ -9,7 +9,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 revision = "003"
-down_revision = "002"
+down_revision = "002_unique_source_ids"
 branch_labels = None
 depends_on = None
 

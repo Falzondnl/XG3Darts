@@ -49,6 +49,8 @@ def _db_url_sync(url: str) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--db-url", default=None,
+                        help="Override DATABASE_URL (e.g. public proxy for local runs)")
     args = parser.parse_args()
 
     log.info("loading_elo_json")
@@ -63,7 +65,7 @@ def main() -> None:
 
     log.info("elo_loaded", players=len(ratings_dict))
 
-    db_url = _db_url_sync(settings.DATABASE_URL)
+    db_url = _db_url_sync(args.db_url or settings.DATABASE_URL)
     conn = psycopg2.connect(db_url, connect_timeout=30)
 
     # Load pdc_id → player_id map
