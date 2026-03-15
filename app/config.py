@@ -104,9 +104,47 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------ #
     # Service URLs
     # ------------------------------------------------------------------ #
+    RAILWAY_PUBLIC_DOMAIN: str = Field(
+        default="",
+        description="Injected by Railway: the public domain for this service",
+    )
     DARTS_SERVICE_URL: str = Field(
-        default="http://localhost:8000/api/v1/darts",
-        description="This service's own base URL (used in internal links)",
+        default="",
+        description=(
+            "This service's own base URL (used in internal links). "
+            "Defaults to https://{RAILWAY_PUBLIC_DOMAIN}/api/v1/darts when deployed."
+        ),
+    )
+
+    @field_validator("DARTS_SERVICE_URL", mode="before")
+    @classmethod
+    def resolve_service_url(cls, v: str, info) -> str:
+        """
+        If DARTS_SERVICE_URL is not explicitly set, derive it from
+        RAILWAY_PUBLIC_DOMAIN (injected automatically by Railway at runtime).
+        Falls back to localhost for local development.
+        """
+        if v:
+            return v
+        import os
+        domain = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "")
+        if domain:
+            return f"https://{domain}/api/v1/darts"
+        return "http://localhost:8000/api/v1/darts"
+
+    # ------------------------------------------------------------------ #
+    # B2B API key authentication
+    # ------------------------------------------------------------------ #
+    API_KEY_SALT: str = Field(
+        default="",
+        description="HMAC salt for API key hashing (must be set in production)",
+    )
+    API_KEYS: str = Field(
+        default="",
+        description=(
+            "Comma-separated list of valid plaintext API keys. "
+            "Leave empty to disable enforcement (development mode)."
+        ),
     )
 
     # ------------------------------------------------------------------ #

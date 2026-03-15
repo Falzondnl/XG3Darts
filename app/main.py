@@ -18,6 +18,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.auth import api_key_middleware
 from app.config import settings
 from app.routes import (
     events,
@@ -135,6 +136,9 @@ def create_app() -> FastAPI:
         allow_methods=["GET", "POST", "PATCH", "DELETE"],
         allow_headers=["*"],
     )
+
+    # API key authentication (enforced when API_KEYS env var is set)
+    app.middleware("http")(api_key_middleware)
 
     # Request logging middleware
     @app.middleware("http")

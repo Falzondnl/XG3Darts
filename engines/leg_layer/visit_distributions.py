@@ -19,6 +19,7 @@ Data hierarchy (partial pooling):
 
 from __future__ import annotations
 
+import functools
 import math
 from dataclasses import dataclass, field
 from typing import Optional
@@ -191,6 +192,7 @@ def _derive_pressure_band_distribution(three_da: float) -> dict[int, float]:
     return {s: p / total for s, p in raw_probs.items() if p / total > 1e-8}
 
 
+@functools.lru_cache(maxsize=1)
 def _enumerate_valid_visit_scores_open() -> list[int]:
     """All plausible 3-dart visit scores in open band (score > 300)."""
     # In open band, players throw T20/T19/T18 — scores cluster 51-180
@@ -204,6 +206,7 @@ def _enumerate_valid_visit_scores_open() -> list[int]:
     return sorted(scores)
 
 
+@functools.lru_cache(maxsize=1)
 def _enumerate_valid_visit_scores_middle() -> list[int]:
     """All plausible 3-dart visit scores in middle band (171-300)."""
     scores = set()
@@ -216,6 +219,7 @@ def _enumerate_valid_visit_scores_middle() -> list[int]:
     return sorted(scores)
 
 
+@functools.lru_cache(maxsize=1)
 def _enumerate_valid_visit_scores_setup() -> list[int]:
     """All plausible 3-dart visit scores in setup band (100-170)."""
     scores = set()
@@ -228,6 +232,7 @@ def _enumerate_valid_visit_scores_setup() -> list[int]:
     return sorted(scores)
 
 
+@functools.lru_cache(maxsize=1)
 def _enumerate_valid_visit_scores_finish() -> list[int]:
     """All plausible 3-dart visit scores in finish band (41-99)."""
     scores = set()
@@ -242,6 +247,7 @@ def _enumerate_valid_visit_scores_finish() -> list[int]:
     return sorted(scores)
 
 
+@functools.lru_cache(maxsize=1)
 def _enumerate_valid_visit_scores_pressure() -> list[int]:
     """All plausible 3-dart visit scores in pressure band (2-40)."""
     scores = set()
@@ -257,12 +263,20 @@ def _enumerate_valid_visit_scores_pressure() -> list[int]:
 
 
 _BAND_DERIVE_FN = {
-    "open": _derive_open_band_distribution,
-    "middle": _derive_middle_band_distribution,
-    "setup": _derive_setup_band_distribution,
-    "finish": _derive_finish_band_distribution,
-    "pressure": _derive_pressure_band_distribution,
+    "open": functools.lru_cache(maxsize=512)(_derive_open_band_distribution),
+    "middle": functools.lru_cache(maxsize=512)(_derive_middle_band_distribution),
+    "setup": functools.lru_cache(maxsize=512)(_derive_setup_band_distribution),
+    "finish": functools.lru_cache(maxsize=512)(_derive_finish_band_distribution),
+    "pressure": functools.lru_cache(maxsize=512)(_derive_pressure_band_distribution),
 }
+
+# ---------------------------------------------------------------------------
+# Module-level prior-distribution cache.
+# Key: (band, three_da_1dp, stage, short_format, throw_first)
+# Valid for prior-only distributions (data_source="derived").
+# Bypassed when player-specific data is available (R2/DartsOrakel).
+# ---------------------------------------------------------------------------
+_PRIOR_DIST_CACHE: dict[tuple, "ConditionalVisitDistribution"] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -460,9 +474,10 @@ class HierarchicalVisitDistributionModel:
         if three_da <= 0 or three_da > 180:
             raise ValueError(f"three_da must be in (0, 180]; got {three_da}")
 
-        cache_key = f"{player_id}:{score_band}:{stage}:{short_format}:{throw_first}"
-        if cache_key in self._player_cache.get(player_id, {}):
-            return self._player_cache[player_id][cache_key]
+        # Check instance-level player-specific cache first.
+        inst_key = f"{player_id}:{score_band}:{stage}:{short_format}:{throw_first}"
+        if inst_key in self._player_cache.get(player_id, {}):
+            return self._player_cache[player_id][inst_key]
 
         # Attempt to load player-specific data from the store
         player_dist = self._load_player_specific(
@@ -480,8 +495,14 @@ class HierarchicalVisitDistributionModel:
                 band=score_band,
                 n_obs=player_dist.n_observations,
             )
-            self._cache_distribution(player_id, cache_key, player_dist)
+            self._cache_distribution(player_id, inst_key, player_dist)
             return player_dist
+
+        # No player-specific data: check module-level prior cache keyed by 3DA + context.
+        # This avoids re-deriving the same distribution for different players with the same 3DA.
+        prior_key = (score_band, round(three_da, 1), stage, short_format, throw_first)
+        if prior_key in _PRIOR_DIST_CACHE:
+            return _PRIOR_DIST_CACHE[prior_key]
 
         # Insufficient player data — derive from 3DA (global prior)
         prior = self._derive_from_3da(
@@ -507,7 +528,7 @@ class HierarchicalVisitDistributionModel:
                 n_obs=player_dist.n_observations,
                 weight=player_dist.n_observations / min_obs,
             )
-            self._cache_distribution(player_id, cache_key, blended)
+            self._cache_distribution(player_id, inst_key, blended)
             return blended
 
         logger.debug(
@@ -516,7 +537,10 @@ class HierarchicalVisitDistributionModel:
             band=score_band,
             three_da=three_da,
         )
-        self._cache_distribution(player_id, cache_key, prior)
+        # Store in both the module-level prior cache (shared across all players)
+        # and the instance-level player cache.
+        _PRIOR_DIST_CACHE[prior_key] = prior
+        self._cache_distribution(player_id, inst_key, prior)
         return prior
 
     def _load_player_specific(

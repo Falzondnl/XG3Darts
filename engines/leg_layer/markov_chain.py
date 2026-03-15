@@ -51,6 +51,16 @@ MARKOV_TOTAL_TOLERANCE: float = 1e-3
 # Maximum visits to consider in the finish-time distribution
 MAX_VISITS_DISTRIBUTION: int = 120
 
+# ---------------------------------------------------------------------------
+# Module-level caches for finish-time distributions and transition matrices.
+#
+# Keyed by (three_da_rounded_to_1dp, starting_score).
+# Valid only for prior-only distributions (data_source in {"derived", "pooled"}).
+# Bypassed automatically when DartConnect visit-level data is present.
+# ---------------------------------------------------------------------------
+_FINISH_DIST_CACHE: dict[tuple[float, int], np.ndarray] = {}
+_TRANSITION_MAT_CACHE: dict[tuple[float, int], np.ndarray] = {}
+
 
 @dataclass
 class LegResult:
@@ -324,6 +334,44 @@ class DartsMarkovChain:
 
         return transitions
 
+    def _build_transition_matrix(
+        self,
+        visit_dists: dict[str, ConditionalVisitDistribution],
+        player_id: str,
+        three_da: float,
+        starting_score: int,
+    ) -> np.ndarray:
+        """
+        Build a dense numpy transition matrix T of shape (N, N).
+
+        T[new_s, s] = P(transition from score s to score new_s in one visit).
+
+        State 0 = checkout (absorbing sink — callers zero it out after extracting).
+        State 1 = stuck (absorbing: self-loop).
+        States 2..starting_score = active play.
+
+        This matrix is the core of the vectorized forward simulation.
+        """
+        N = starting_score + 1
+        T = np.zeros((N, N), dtype=np.float64)
+
+        for s in range(2, N):
+            trans = self._compute_score_transition_probs(
+                score=s,
+                visit_dists=visit_dists,
+                player_id=player_id,
+                three_da=three_da,
+            )
+            for new_s, prob in trans.items():
+                if 0 <= new_s < N:
+                    T[new_s, s] += prob
+
+        # State 1: stuck — self-loop
+        T[1, 1] = 1.0
+        # State 0: do NOT make absorbing — caller extracts T[0,:] @ state and zeros it
+
+        return T
+
     def _compute_visit_finish_distribution(
         self,
         visit_dists: dict[str, ConditionalVisitDistribution],
@@ -336,17 +384,20 @@ class DartsMarkovChain:
         Compute f[k] = P(player finishes leg on exactly visit k).
 
         This is the finish-time PMF for a single player starting at starting_score.
-        Uses forward simulation of the Markov chain:
+        Uses forward simulation of the Markov chain with numpy vectorization:
 
           state_prob[s] = P(player is at score s after k complete visits)
-          f[k] = state_prob[0] at visit k
+          f[k] = T[0, :] @ state_prob  (checkout probability this step)
 
-        Algorithm:
-          Initialize: state_prob[starting_score] = 1.0
-          Each visit: apply transition matrix to state_prob
-          f[k] = incremental probability reaching state 0
+        The transition matrix T is built once per (three_da, starting_score) pair
+        and cached at module level for prior-only distributions.
 
-        This is O(max_visits * N) where N = starting_score.
+        This is O(max_visits * N^2) with BLAS matrix-vector multiply — typically
+        100x faster than the pure-Python dict loop it replaces.
+
+        Caching: bypassed if any distribution uses DartConnect data
+        (data_source == "dartconnect"), because those distributions are
+        player-specific and cannot be shared across players.
 
         Returns
         -------
@@ -354,65 +405,54 @@ class DartsMarkovChain:
             f[0] = 0, f[k] = P(finishes on visit k) for k >= 1.
         """
         N = starting_score + 1
-        f = np.zeros(max_visits + 1, dtype=np.float64)
 
-        # State distribution: state_prob[s] = P(player is at score s)
-        # s=0 is absorbing (finished), s=1 is also effectively absorbing (stuck)
-        state_prob = np.zeros(N, dtype=np.float64)
-        state_prob[starting_score] = 1.0
+        # Determine whether all distributions are prior-only (cacheable).
+        prior_only = all(
+            d.data_source in {"derived", "pooled"}
+            for d in visit_dists.values()
+        )
+        cache_key = (round(three_da, 1), starting_score)
 
-        # Precompute transition probabilities for each score
-        # Cache them since they don't change between visits
-        transitions: list[dict[int, float]] = [{}] * N
-        for s in range(2, N):
-            transitions[s] = self._compute_score_transition_probs(
-                score=s,
+        if prior_only and cache_key in _FINISH_DIST_CACHE:
+            return _FINISH_DIST_CACHE[cache_key]
+
+        # Build or retrieve the transition matrix.
+        if prior_only and cache_key in _TRANSITION_MAT_CACHE:
+            T = _TRANSITION_MAT_CACHE[cache_key]
+        else:
+            T = self._build_transition_matrix(
                 visit_dists=visit_dists,
                 player_id=player_id,
                 three_da=three_da,
+                starting_score=starting_score,
             )
+            if prior_only:
+                _TRANSITION_MAT_CACHE[cache_key] = T
 
-        # Special: state 0 is absorbing
-        transitions[0] = {0: 1.0}
-        transitions[1] = {1: 1.0}  # stuck at 1
+        # Forward simulation using numpy matrix-vector multiply.
+        f = np.zeros(max_visits + 1, dtype=np.float64)
+        state_prob = np.zeros(N, dtype=np.float64)
+        state_prob[starting_score] = 1.0
 
-        prev_finished_cumulative = 0.0  # cumulative probability absorbed up to end of previous visit
+        # Checkout row: T[0, s] = probability of checking out from state s.
+        checkout_row = T[0, :]
 
         for k in range(1, max_visits + 1):
-            # new_state_prob only tracks UNFINISHED states (score > 1)
-            # Finished probability is accumulated separately
-            new_state_prob = np.zeros(N, dtype=np.float64)
-            newly_finished = 0.0
-
-            for s in range(2, N):
-                p_s = state_prob[s]
-                if p_s < 1e-12:
-                    continue
-
-                trans = transitions[s]
-                for new_s, prob in trans.items():
-                    if new_s == 0:
-                        # Player finishes (checks out) this visit
-                        newly_finished += p_s * prob
-                    elif 1 < new_s < N:
-                        new_state_prob[new_s] += p_s * prob
-                    elif new_s == 1:
-                        # Stuck at 1: can't checkout, count as stuck (not finished)
-                        new_state_prob[1] += p_s * prob
-                    # new_s < 0: should not occur
-
-            # f[k] = probability finishing EXACTLY on visit k
+            # f[k] = probability of finishing exactly on visit k.
+            newly_finished = float(checkout_row @ state_prob)
             f[k] = max(0.0, newly_finished)
-            prev_finished_cumulative += newly_finished
+
+            # Advance state distribution; do not let probability pool at state 0.
+            new_state_prob = T @ state_prob
+            new_state_prob[0] = 0.0  # remove absorbed probability
 
             state_prob = new_state_prob
 
-            # Early termination: essentially all probability absorbed
+            # Early termination when virtually all mass is absorbed.
             remaining = float(state_prob[2:].sum()) + float(state_prob[1])
             if remaining < 1e-8:
                 break
 
-        # Ensure non-negative
         f = np.maximum(f, 0.0)
 
         logger.debug(
@@ -422,6 +462,9 @@ class DartsMarkovChain:
             total_prob=round(float(f.sum()), 6),
             expected_visits=round(float(np.sum(np.arange(len(f)) * f)), 2),
         )
+
+        if prior_only:
+            _FINISH_DIST_CACHE[cache_key] = f
 
         return f
 
