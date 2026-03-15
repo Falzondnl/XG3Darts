@@ -16,8 +16,8 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 
-revision: str = "004_liability_and_trader_overrides"
-down_revision = "003_ml_model_artifacts"
+revision: str = "004"
+down_revision = "003"
 branch_labels = None
 depends_on = None
 
@@ -196,7 +196,7 @@ def upgrade() -> None:
             "params",
             postgresql.JSONB(astext_type=sa.Text()),
             nullable=False,
-            server_default="'{}'",
+            server_default=sa.text("'{}'"),
             comment=(
                 "WIDEN_MARGIN: {extra_margin_pct: 5.0} | "
                 "RESTRICT_STAKES: {max_stake: 500} | "
