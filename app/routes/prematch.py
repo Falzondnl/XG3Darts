@@ -1546,3 +1546,155 @@ async def price_multi_totals(request: MultiLegLineRequest) -> dict[str, Any]:
         "total_lines": result_lines,
         "applied_margin": round(request.base_margin, 5),
     }
+
+
+# ---------------------------------------------------------------------------
+# POST /prematch/set-betting — Correct set score (World Championship format)
+# ---------------------------------------------------------------------------
+
+class SetBettingRequest(BaseModel):
+    """Set betting / set handicap request (PDC_WC and similar formats)."""
+    competition_code: str = Field(default="PDC_WC")
+    round_name: str = Field(default="Final")
+    p1_id: str
+    p2_id: str
+    p1_three_da: float = Field(..., gt=0, lt=200)
+    p2_three_da: float = Field(..., gt=0, lt=200)
+    p1_starts_first: bool = True
+    base_margin: float = Field(default=0.05, gt=0.0, le=0.15)
+    double_start_required: Optional[bool] = None
+
+
+@router.post(
+    "/prematch/set-betting",
+    summary="Correct set score market (PDC World Championship)",
+    tags=["Pre-Match"],
+)
+async def price_set_betting(request: SetBettingRequest) -> dict[str, Any]:
+    """
+    Price the correct set score market for sets-and-legs formats.
+
+    Used for PDC World Championship (e.g. 'P1 wins 7-5 sets').
+    Returns a probability distribution over all possible set scores,
+    plus the set winner market (P1/P2 wins the match by sets).
+
+    Pinnacle and bet365 both offer this for the PDC World Championship.
+
+    Works only with sets-format rounds (PDC_WC, WDF_WC).
+    Raises 422 if called for a legs-only format.
+    """
+    hb_req = MatchPriceRequest(
+        competition_code=request.competition_code,
+        round_name=request.round_name,
+        p1_id=request.p1_id,
+        p2_id=request.p2_id,
+        p1_three_da=request.p1_three_da,
+        p2_three_da=request.p2_three_da,
+        p1_starts_first=request.p1_starts_first,
+        regime=0,
+        starter_confidence=1.0,
+        source_confidence=1.0,
+        model_agreement=1.0,
+        market_liquidity="high",
+        base_margin=request.base_margin,
+        double_start_required=request.double_start_required,
+    )
+    hb, fmt = _compute_hold_break(hb_req)
+
+    round_fmt = fmt.get_round(request.round_name)
+    if not round_fmt.is_sets_format:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Round '{request.round_name}' in '{request.competition_code}' is not a sets format. "
+                   "Use /prematch/exact-score for legs-only formats."
+        )
+
+    sets_to_win = round_fmt.sets_to_win
+    legs_per_set = round_fmt.legs_per_set
+    legs_to_win_set = legs_per_set  # legs needed to win a set (first-to)
+
+    p1_hold = hb.p1_hold
+    p1_break = 1.0 - hb.p2_hold
+
+    # Forward DP over set-level states
+    # First compute P(P1 wins a set) and P(P2 wins a set) assuming leg alternation
+    # A set is itself a race-to-legs_per_set within the set
+    from engines.match_layer.race_to_x_engine import race_to_x
+
+    # Set-level probabilities (assuming P1 starts first leg of each set)
+    # In WC format, set starter alternates between sets based on match rules
+    # Simplification: use overall hold/break to get set win prob
+    set_result_p1 = race_to_x(
+        target=legs_to_win_set,
+        p1_hold=p1_hold,
+        p2_hold=hb.p2_hold,
+        p1_starts=request.p1_starts_first,
+    )
+    p1_wins_set = set_result_p1.p1_win
+    p2_wins_set = 1.0 - p1_wins_set
+
+    # Forward DP over match-level set scores
+    sv0 = 1 if request.p1_starts_first else 2
+    states: dict[tuple[int, int], float] = {(0, 0): 1.0}
+    set_score_dist: dict[str, float] = {}
+
+    while states:
+        new_states: dict[tuple[int, int], float] = {}
+        for (s1, s2), prob in states.items():
+            for set_winner, p_set in ((1, p1_wins_set), (2, p2_wins_set)):
+                ns1 = s1 + (1 if set_winner == 1 else 0)
+                ns2 = s2 + (1 if set_winner == 2 else 0)
+                if ns1 >= sets_to_win or ns2 >= sets_to_win:
+                    score_key = f"p1_{ns1}_p2_{ns2}"
+                    set_score_dist[score_key] = set_score_dist.get(score_key, 0.0) + prob * p_set
+                else:
+                    k = (ns1, ns2)
+                    new_states[k] = new_states.get(k, 0.0) + prob * p_set
+        states = new_states
+
+    # Aggregate match winner
+    p1_match_win = sum(v for k, v in set_score_dist.items() if k.startswith(f"p1_{sets_to_win}"))
+    p2_match_win = 1.0 - p1_match_win
+
+    # Apply margin to set score distribution
+    total_outcomes = len(set_score_dist)
+    margin_per = request.base_margin / total_outcomes if total_outcomes else request.base_margin
+
+    adj_dist = {k: round(v + margin_per if v > 1e-9 else v, 6) for k, v in set_score_dist.items()}
+    adj_match = _margin_engine.apply(
+        true_probs={"p1_wins": p1_match_win, "p2_wins": p2_match_win},
+        regime=0,
+        base_margin=request.base_margin,
+    )
+
+    return {
+        "market": "set_betting",
+        "competition_code": request.competition_code,
+        "round_name": request.round_name,
+        "p1_id": request.p1_id,
+        "p2_id": request.p2_id,
+        "sets_to_win": sets_to_win,
+        "legs_per_set": legs_per_set,
+        "set_probabilities": {
+            "p1_wins_set": round(p1_wins_set, 6),
+            "p2_wins_set": round(p2_wins_set, 6),
+        },
+        "match_winner": {
+            "true_probabilities": {
+                "p1_wins": round(p1_match_win, 6),
+                "p2_wins": round(p2_match_win, 6),
+            },
+            "decimal_odds": {
+                "p1_wins": round(1.0 / adj_match["p1_wins"], 4) if adj_match.get("p1_wins", 0) > 1e-9 else None,
+                "p2_wins": round(1.0 / adj_match["p2_wins"], 4) if adj_match.get("p2_wins", 0) > 1e-9 else None,
+            },
+        },
+        "correct_set_score": {
+            "true_probabilities": {k: round(v, 6) for k, v in sorted(set_score_dist.items())},
+            "decimal_odds": {
+                k: round(1.0 / v, 4) if v > 1e-9 else None
+                for k, v in sorted(set_score_dist.items())
+            },
+        },
+        "applied_margin": round(request.base_margin, 5),
+    }
