@@ -22,6 +22,11 @@ import io
 import json
 import re
 import sys
+
+# Force UTF-8 output on Windows consoles that default to cp1252,
+# so player names with diacritics (č, ě, ř, etc.) print cleanly.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 import time
 import urllib.request
 import urllib.error
