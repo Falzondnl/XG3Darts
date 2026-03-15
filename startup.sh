@@ -23,6 +23,17 @@ if [ $attempt -gt $MAX_ATTEMPTS ]; then
     echo "[startup] WARNING: Migration failed after $MAX_ATTEMPTS attempts. Starting app anyway."
 fi
 
+echo "[startup] Starting Optic Odds freshness worker (background)..."
+if [ -n "${OPTIC_ODDS_API_KEY}" ]; then
+    python data/sources/optic_odds_freshness.py \
+        --interval 60 \
+        --db-url "${DATABASE_URL}" \
+        >> /tmp/optic_odds_freshness.log 2>&1 &
+    echo "[startup] Optic Odds freshness worker started (PID $!)."
+else
+    echo "[startup] OPTIC_ODDS_API_KEY not set — skipping freshness worker."
+fi
+
 echo "[startup] Starting API (port ${PORT:-8000})..."
 exec uvicorn app.main:app \
     --host 0.0.0.0 \
