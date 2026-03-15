@@ -493,7 +493,7 @@ _PDC_WC_2026_FIELD = [
 
 
 @router.get(
-    "/outrights/markets",
+    "/outrights/catalog",
     summary="List all active outright markets",
     tags=["Outrights"],
 )
