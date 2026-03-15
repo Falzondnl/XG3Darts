@@ -1325,10 +1325,9 @@ async def price_first_leg(request: FirstLegRequest) -> dict[str, Any]:
         p1_true = 1.0 - hb.p2_hold
         p2_true = hb.p2_hold
 
-    adj = _margin_engine.apply(
+    adj = _shin_model.apply_shin_margin(
         true_probs={"p1_wins_leg1": p1_true, "p2_wins_leg1": p2_true},
-        regime=0,
-        base_margin=request.base_margin,
+        target_margin=request.base_margin,
     )
 
     return {
@@ -1417,10 +1416,9 @@ async def price_both_to_score(request: BothToScoreRequest) -> dict[str, Any]:
     p_yes = p_both(0, 0, sv0)
     p_no = 1.0 - p_yes
 
-    adj = _margin_engine.apply(
+    adj = _shin_model.apply_shin_margin(
         true_probs={"yes": p_yes, "no": p_no},
-        regime=0,
-        base_margin=request.base_margin,
+        target_margin=request.base_margin,
     )
 
     return {
@@ -1522,10 +1520,9 @@ async def price_multi_totals(request: MultiLegLineRequest) -> dict[str, Any]:
             continue
         p_over /= total_p
         p_under /= total_p
-        adj = _margin_engine.apply(
+        adj = _shin_model.apply_shin_margin(
             true_probs={"over": p_over, "under": p_under},
-            regime=0,
-            base_margin=request.base_margin,
+            target_margin=request.base_margin,
         )
         result_lines.append({
             "line": line,
@@ -1661,10 +1658,9 @@ async def price_set_betting(request: SetBettingRequest) -> dict[str, Any]:
     margin_per = request.base_margin / total_outcomes if total_outcomes else request.base_margin
 
     adj_dist = {k: round(v + margin_per if v > 1e-9 else v, 6) for k, v in set_score_dist.items()}
-    adj_match = _margin_engine.apply(
+    adj_match = _shin_model.apply_shin_margin(
         true_probs={"p1_wins": p1_match_win, "p2_wins": p2_match_win},
-        regime=0,
-        base_margin=request.base_margin,
+        target_margin=request.base_margin,
     )
 
     return {

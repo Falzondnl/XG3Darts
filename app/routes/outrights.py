@@ -620,13 +620,12 @@ async def quick_outright_price(
 
         _result_cache[cache_key] = result
 
-    # Apply margin to win probs
-    margin_engine = DartsMarginEngine()
-    n_players = len(result.player_win_probs)
-    adj_probs = margin_engine.apply(
+    # Apply Shin margin to win probs
+    from margin.shin_margin import ShinMarginModel
+    shin = ShinMarginModel()
+    adj_probs = shin.apply_shin_margin(
         true_probs=result.player_win_probs,
-        regime=0,
-        base_margin=base_margin,
+        target_margin=base_margin,
     )
 
     sorted_players = sorted(
