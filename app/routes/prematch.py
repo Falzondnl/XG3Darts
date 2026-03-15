@@ -956,47 +956,75 @@ async def smart_price(
     """
     from sqlalchemy import text as sql_text
 
-    # Fetch both players in a single query (including R0 ML features)
-    result = await session.execute(
-        sql_text("""
-            SELECT p.id,
-                   COALESCE(p.dartsorakel_3da, :fallback) AS three_da,
-                   COALESCE(e.rating_after, 1500.0) AS elo_rating,
-                   p.source_confidence,
-                   p.first_name, p.last_name, p.nickname,
-                   COALESCE(p.pdc_ranking, 200) AS pdc_ranking,
-                   p.country_code
-            FROM darts_players p
-            LEFT JOIN darts_elo_ratings e
-                ON e.player_id = p.id AND e.pool = 'pdc_mens'
-                AND e.match_date = (
-                    SELECT MAX(e2.match_date) FROM darts_elo_ratings e2
-                    WHERE e2.player_id = p.id AND e2.pool = 'pdc_mens'
-                )
-            WHERE p.id IN (:p1_id, :p2_id)
-        """),
-        {"p1_id": request.p1_id, "p2_id": request.p2_id,
-         "fallback": request.fallback_3da},
-    )
-    rows = {row[0]: row for row in result.fetchall()}
+    # Fetch both players from DB; fall back to request-supplied values if DB unavailable
+    _db_error: Optional[str] = None
+    p1_three_da: float = request.fallback_3da
+    p2_three_da: float = request.fallback_3da
+    p1_elo: float = 1500.0
+    p2_elo: float = 1500.0
+    src_conf: float = 0.85
+    p1_rank: float = 200.0
+    p2_rank: float = 200.0
+    p1_country: str = ""
+    p2_country: str = ""
+    p1_name_db: Optional[str] = None
+    p2_name_db: Optional[str] = None
 
-    if request.p1_id not in rows:
-        raise HTTPException(status_code=404, detail=f"Player {request.p1_id} not found")
-    if request.p2_id not in rows:
-        raise HTTPException(status_code=404, detail=f"Player {request.p2_id} not found")
+    try:
+        result = await session.execute(
+            sql_text("""
+                SELECT p.id,
+                       COALESCE(p.dartsorakel_3da, :fallback) AS three_da,
+                       COALESCE(e.rating_after, 1500.0) AS elo_rating,
+                       p.source_confidence,
+                       p.first_name, p.last_name, p.nickname,
+                       COALESCE(p.pdc_ranking, 200) AS pdc_ranking,
+                       p.country_code
+                FROM darts_players p
+                LEFT JOIN darts_elo_ratings e
+                    ON e.player_id = p.id AND e.pool = 'pdc_mens'
+                    AND e.match_date = (
+                        SELECT MAX(e2.match_date) FROM darts_elo_ratings e2
+                        WHERE e2.player_id = p.id AND e2.pool = 'pdc_mens'
+                    )
+                WHERE p.id IN (:p1_id, :p2_id)
+            """),
+            {"p1_id": request.p1_id, "p2_id": request.p2_id,
+             "fallback": request.fallback_3da},
+        )
+        rows = {row[0]: row for row in result.fetchall()}
 
-    p1_row = rows[request.p1_id]
-    p2_row = rows[request.p2_id]
+        if request.p1_id in rows:
+            p1_row = rows[request.p1_id]
+            p1_three_da = float(p1_row[1])
+            p1_elo = float(p1_row[2])
+            src_conf_p1 = float(p1_row[3] or 0.85)
+            p1_rank = float(p1_row[7] or 200)
+            p1_country = p1_row[8] or ""
+            p1_nick = p1_row[6] or ""
+            p1_name_db = p1_nick or f"{p1_row[4] or ''} {p1_row[5] or ''}".strip() or None
+        else:
+            src_conf_p1 = 0.85
 
-    p1_three_da = float(p1_row[1])
-    p2_three_da = float(p2_row[1])
-    p1_elo = float(p1_row[2])
-    p2_elo = float(p2_row[2])
-    src_conf = float(min(p1_row[3] or 0.85, p2_row[3] or 0.85))
-    p1_rank = float(p1_row[7] or 200)
-    p2_rank = float(p2_row[7] or 200)
-    p1_country = p1_row[8] or ""
-    p2_country = p2_row[8] or ""
+        if request.p2_id in rows:
+            p2_row = rows[request.p2_id]
+            p2_three_da = float(p2_row[1])
+            p2_elo = float(p2_row[2])
+            src_conf_p2 = float(p2_row[3] or 0.85)
+            p2_rank = float(p2_row[7] or 200)
+            p2_country = p2_row[8] or ""
+            p2_nick = p2_row[6] or ""
+            p2_name_db = p2_nick or f"{p2_row[4] or ''} {p2_row[5] or ''}".strip() or None
+        else:
+            src_conf_p2 = 0.85
+
+        src_conf = min(src_conf_p1, src_conf_p2)
+    except Exception as exc:
+        _db_error = str(exc)
+        logger.warning("smart_price_db_unavailable", error=_db_error[:100])
+        # Use fallback 3DA from request if provided, else use default
+        p1_three_da = request.fallback_3da
+        p2_three_da = request.fallback_3da
 
     # --- R0 ML model blend (if model is available) ---
     ml_p1_win: Optional[float] = None
@@ -1078,17 +1106,16 @@ async def smart_price(
     adjusted, margin = _apply_margin(inner, fmt, true_probs)
     decimal_odds = {k: round(1.0 / v, 4) if v > 1e-9 else None for k, v in adjusted.items()}
 
-    def _name(row) -> str:
-        n = f"{row[4] or ''} {row[5] or ''}".strip()
-        return row[6] or n or "Unknown"
+    p1_display = p1_name_db or request.p1_id
+    p2_display = p2_name_db or request.p2_id
 
     return {
         "competition_code": request.competition_code,
         "round_name": request.round_name,
-        "p1": {"id": request.p1_id, "name": _name(p1_row),
+        "p1": {"id": request.p1_id, "name": p1_display,
                "three_da": round(p1_three_da, 2), "elo": round(p1_elo, 1),
                "pdc_ranking": int(p1_rank)},
-        "p2": {"id": request.p2_id, "name": _name(p2_row),
+        "p2": {"id": request.p2_id, "name": p2_display,
                "three_da": round(p2_three_da, 2), "elo": round(p2_elo, 1),
                "pdc_ranking": int(p2_rank)},
         "true_probabilities": {k: round(v, 6) for k, v in true_probs.items()},
@@ -1104,9 +1131,10 @@ async def smart_price(
             "ml_source": ml_source,
         },
         "data_sources": {
-            "three_da": "dartsorakel" if p1_three_da != request.fallback_3da else "fallback",
-            "elo": "pdc_mens_pool",
+            "three_da": "db" if not _db_error else "fallback",
+            "elo": "db" if not _db_error else "default_1500",
         },
+        "_db_available": _db_error is None,
     }
 
 
