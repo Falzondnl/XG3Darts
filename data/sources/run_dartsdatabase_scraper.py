@@ -72,16 +72,21 @@ HEADERS = {
 
 def _sanitize_url(url: str) -> str:
     """
-    URL-encode any spaces/control characters in a URL.
+    URL-encode spaces/control characters in a URL.
 
-    Python 3.13 is stricter about control characters in URLs.
-    We parse, re-encode the query string, and reconstruct.
+    Python 3.13 is strict about control characters in URLs.
+    urlparse misbehaves on URLs with literal spaces, so we avoid it:
+    split on '?' to separate base from query, then re-encode the query.
     """
-    parsed = urllib.parse.urlparse(url)
-    # Re-encode query string (handles spaces in tna, eda params)
-    qs = urllib.parse.urlencode(urllib.parse.parse_qsl(parsed.query, keep_blank_values=True))
-    sanitized = urllib.parse.urlunparse(parsed._replace(query=qs))
-    return sanitized
+    if " " not in url and "\t" not in url:
+        return url
+    if "?" not in url:
+        return urllib.parse.quote(url, safe="%/:@#!~*'(),;")
+    base, query = url.split("?", 1)
+    encoded_query = urllib.parse.urlencode(
+        urllib.parse.parse_qsl(query, keep_blank_values=True, separator="&"),
+    )
+    return f"{base}?{encoded_query}"
 
 
 def fetch_url(url: str) -> Optional[str]:
