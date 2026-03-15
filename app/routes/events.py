@@ -296,7 +296,7 @@ async def price_all_fixtures(
     from engines.leg_layer.hold_break_model import HoldBreakModel
     from engines.match_layer.match_combinatorics import MatchCombinatorialEngine
     from competition.format_registry import get_format
-    from margin.blending_engine import DartsMarginEngine
+    from margin.shin_margin import ShinMarginModel
 
     event = next((e for e in PDC_CALENDAR_2026 if e["event_id"] == event_id), None)
     if event is None:
@@ -337,7 +337,7 @@ async def price_all_fixtures(
 
     hb_model = HoldBreakModel()
     match_engine = MatchCombinatorialEngine()
-    margin_engine = DartsMarginEngine()
+    shin_model = ShinMarginModel()
     priced = []
 
     for row in rows:
@@ -363,10 +363,9 @@ async def price_all_fixtures(
             if result_match.draw > 0:
                 true_p["draw"] = result_match.draw
 
-            adj_p = margin_engine.apply(
+            adj_p = shin_model.apply_shin_margin(
                 true_probs=true_p,
-                regime=0,
-                base_margin=request.base_margin,
+                target_margin=request.base_margin,
             )
             dec_odds = {k: round(1.0 / v, 4) if v > 1e-9 else None
                         for k, v in adj_p.items()}
