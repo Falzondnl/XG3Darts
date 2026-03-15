@@ -5,14 +5,22 @@ Uses Spearman rank correlations from historical joint outcomes,
 with hierarchical shrinkage toward a global prior when sample size
 is insufficient, followed by Higham PSD projection.
 
-Market dimensions (columns/rows 0-6):
-  0: match_win           P(P1 wins)
-  1: total_legs_over     P(total legs > line)
-  2: handicap            P(P1 covers handicap)
-  3: 180_over            P(total 180s > line)
-  4: checkout_over       P(highest checkout > line)
-  5: exact_score         P(specific exact score)
-  6: leg_winner_next     P(P1 wins next leg)
+Market dimensions (columns/rows 0-14):
+  0:  match_win            P(P1 wins)
+  1:  total_legs_over      P(total legs > line)
+  2:  handicap             P(P1 covers handicap)
+  3:  180_over             P(total 180s > line)
+  4:  checkout_over        P(highest checkout > line)
+  5:  exact_score          P(specific exact score)
+  6:  leg_winner_next      P(P1 wins next leg)
+  7:  first_leg_winner     P(P1 wins the first leg)
+  8:  most_180s            P(P1 hits more 180s than P2)
+  9:  highest_checkout     P(P1 achieves highest checkout)
+  10: total_180s_band      P(total 180s in a specific band)
+  11: player_checkout_over P(player-specific checkout > threshold)
+  12: sets_over            P(total sets > line, sets-format matches)
+  13: break_of_throw       P(at least one break of throw in match)
+  14: nine_dart_finish     P(nine-dart finish in match)
 
 The global prior is derived from domain expertise and
 calibration against historical PDC tournament data.
@@ -20,6 +28,9 @@ It captures well-known structural relationships:
   - Match winner strongly correlated with handicap cover
   - Total legs correlated with both-player quality (positively)
   - 180 count correlated with total legs (more legs = more 180s)
+  - First leg winner moderately correlated with match winner
+  - Most 180s moderately correlated with match winner (stronger player)
+  - Break of throw positively correlated with total legs (longer matches)
 """
 from __future__ import annotations
 
@@ -36,34 +47,81 @@ logger = structlog.get_logger(__name__)
 # ---------------------------------------------------------------------------
 # Global correlation prior
 # ---------------------------------------------------------------------------
-# Dimensions: match_win, total_legs_over, handicap, 180_over,
-#             checkout_over, exact_score, leg_winner_next
+# Dimensions (15x15):
+#   0:  match_win            1:  total_legs_over     2:  handicap
+#   3:  180_over             4:  checkout_over        5:  exact_score
+#   6:  leg_winner_next      7:  first_leg_winner     8:  most_180s
+#   9:  highest_checkout     10: total_180s_band      11: player_checkout_over
+#   12: sets_over            13: break_of_throw       14: nine_dart_finish
+#
+# Correlation values reasoned from darts domain expertise:
+#   - first_leg_winner (7): moderately correlated with match_win (+0.35),
+#     weakly with handicap (+0.20), very weakly with leg_winner_next (+0.15).
+#     Negatively correlated with total_legs_over (-0.12) since winning the
+#     first leg gives a head-start that can shorten matches.
+#   - most_180s (8): correlated with match_win (+0.30, stronger players hit
+#     more maximums), with 180_over (+0.65, collinear: more 180s in match →
+#     likely one player leads), with total_legs_over (+0.35).
+#   - highest_checkout (9): strongly correlated with checkout_over (+0.72),
+#     moderately with match_win (+0.40), weakly with most_180s (+0.10).
+#   - total_180s_band (10): correlated with 180_over (+0.55) and
+#     total_legs_over (+0.40), weakly negative with exact_score (-0.10).
+#   - player_checkout_over (11): strongly correlated with checkout_over (+0.60),
+#     moderately with highest_checkout (+0.55), weakly with match_win (+0.25).
+#   - sets_over (12): correlated with total_legs_over (+0.58), weakly with
+#     180_over (+0.25). Negative with exact_score (-0.30) since sets formats
+#     increase variance.
+#   - break_of_throw (13): positively correlated with total_legs_over (+0.42),
+#     180_over (+0.20), negatively with match_win (-0.15, dominant winners
+#     rarely get broken).
+#   - nine_dart_finish (14): weakly correlated with 180_over (+0.18),
+#     checkout_over (+0.22), player_checkout_over (+0.20). Near-independent
+#     of most markets — rare event.
 
 DARTS_GLOBAL_CORRELATION_PRIOR: np.ndarray = np.array([
-    # mw      totl    h_cap   180     co      ex_sc   lw
-    [ 1.00, -0.28,  0.52, -0.40,  0.58, -0.45,  0.12],  # match_win
-    [-0.28,  1.00,  0.32,  0.38, -0.10, -0.08,  0.62],  # total_legs_over
-    [ 0.52,  0.32,  1.00,  0.08,  0.35, -0.22,  0.18],  # handicap
-    [-0.40,  0.38,  0.08,  1.00, -0.15,  0.05,  0.48],  # 180_over
-    [ 0.58, -0.10,  0.35, -0.15,  1.00, -0.38,  0.08],  # checkout_over
-    [-0.45, -0.08, -0.22,  0.05, -0.38,  1.00, -0.12],  # exact_score
-    [ 0.12,  0.62,  0.18,  0.48,  0.08, -0.12,  1.00],  # leg_winner_next
+    # mw      totl    h_cap   180     co      ex_sc   lw      flw     m180    hco     t180b   pco     sets    bot     9df
+    [ 1.00, -0.28,  0.52, -0.40,  0.58, -0.45,  0.12,  0.35,  0.30,  0.40, -0.18,  0.25, -0.20, -0.15,  0.05],  # 0  match_win
+    [-0.28,  1.00,  0.32,  0.38, -0.10, -0.08,  0.62, -0.12,  0.35, -0.08,  0.40, -0.08,  0.58,  0.42,  0.08],  # 1  total_legs_over
+    [ 0.52,  0.32,  1.00,  0.08,  0.35, -0.22,  0.18,  0.20,  0.15,  0.28, -0.05,  0.22,  0.15, -0.10,  0.04],  # 2  handicap
+    [-0.40,  0.38,  0.08,  1.00, -0.15,  0.05,  0.48,  0.05,  0.65, -0.10,  0.55,  0.08,  0.25,  0.20,  0.18],  # 3  180_over
+    [ 0.58, -0.10,  0.35, -0.15,  1.00, -0.38,  0.08,  0.18,  0.08,  0.72, -0.12,  0.60, -0.08, -0.08,  0.22],  # 4  checkout_over
+    [-0.45, -0.08, -0.22,  0.05, -0.38,  1.00, -0.12, -0.20, -0.15, -0.28, -0.10, -0.22, -0.30, -0.05, -0.05],  # 5  exact_score
+    [ 0.12,  0.62,  0.18,  0.48,  0.08, -0.12,  1.00,  0.15,  0.28,  0.05,  0.30,  0.06,  0.40,  0.35,  0.06],  # 6  leg_winner_next
+    [ 0.35, -0.12,  0.20,  0.05,  0.18, -0.20,  0.15,  1.00,  0.18,  0.22, -0.08,  0.15, -0.10, -0.12,  0.04],  # 7  first_leg_winner
+    [ 0.30,  0.35,  0.15,  0.65,  0.08, -0.15,  0.28,  0.18,  1.00,  0.10,  0.48,  0.12,  0.28,  0.18,  0.15],  # 8  most_180s
+    [ 0.40, -0.08,  0.28, -0.10,  0.72, -0.28,  0.05,  0.22,  0.10,  1.00, -0.10,  0.55, -0.05, -0.06,  0.18],  # 9  highest_checkout
+    [-0.18,  0.40, -0.05,  0.55, -0.12, -0.10,  0.30, -0.08,  0.48, -0.10,  1.00,  0.05,  0.32,  0.22,  0.12],  # 10 total_180s_band
+    [ 0.25, -0.08,  0.22,  0.08,  0.60, -0.22,  0.06,  0.15,  0.12,  0.55,  0.05,  1.00, -0.05, -0.06,  0.20],  # 11 player_checkout_over
+    [-0.20,  0.58,  0.15,  0.25, -0.08, -0.30,  0.40, -0.10,  0.28, -0.05,  0.32, -0.05,  1.00,  0.38,  0.06],  # 12 sets_over
+    [-0.15,  0.42, -0.10,  0.20, -0.08, -0.05,  0.35, -0.12,  0.18, -0.06,  0.22, -0.06,  0.38,  1.00,  0.05],  # 13 break_of_throw
+    [ 0.05,  0.08,  0.04,  0.18,  0.22, -0.05,  0.06,  0.04,  0.15,  0.18,  0.12,  0.20,  0.06,  0.05,  1.00],  # 14 nine_dart_finish
 ], dtype=np.float64)
 
 # Competition-family shrinkage: fraction of empirical data to use
 # (alpha = empirical weight; 1 - alpha = prior weight)
 _FAMILY_SHRINKAGE_THRESHOLD = 500  # samples below this → strong shrinkage toward prior
 
-# Market index names for logging
+# Market index names for logging — order must match the prior matrix above
 MARKET_NAMES = [
-    "match_win",
-    "total_legs_over",
-    "handicap",
-    "180_over",
-    "checkout_over",
-    "exact_score",
-    "leg_winner_next",
+    "match_win",           # 0
+    "total_legs_over",     # 1
+    "handicap",            # 2
+    "180_over",            # 3
+    "checkout_over",       # 4
+    "exact_score",         # 5
+    "leg_winner_next",     # 6
+    "first_leg_winner",    # 7
+    "most_180s",           # 8
+    "highest_checkout",    # 9
+    "total_180s_band",     # 10
+    "player_checkout_over",# 11
+    "sets_over",           # 12
+    "break_of_throw",      # 13
+    "nine_dart_finish",    # 14
 ]
+
+# Number of market dimensions — must equal len(MARKET_NAMES)
+N_MARKET_DIMS: int = len(MARKET_NAMES)
 
 
 class DartsSGPCorrelationEstimator:
@@ -90,9 +148,10 @@ class DartsSGPCorrelationEstimator:
             DARTS_GLOBAL_CORRELATION_PRIOR.
         """
         if prior is not None:
-            if prior.shape != (7, 7):
+            expected = (N_MARKET_DIMS, N_MARKET_DIMS)
+            if prior.shape != expected:
                 raise DartsEngineError(
-                    f"Prior must be 7x7, got {prior.shape}"
+                    f"Prior must be {expected}, got {prior.shape}"
                 )
             self._prior = prior.copy()
         else:
@@ -137,9 +196,10 @@ class DartsSGPCorrelationEstimator:
             If empirical_spearman has wrong shape.
         """
         if empirical_spearman is not None:
-            if empirical_spearman.shape != (7, 7):
+            expected = (N_MARKET_DIMS, N_MARKET_DIMS)
+            if empirical_spearman.shape != expected:
                 raise DartsEngineError(
-                    f"empirical_spearman must be 7x7, got {empirical_spearman.shape}"
+                    f"empirical_spearman must be {expected}, got {empirical_spearman.shape}"
                 )
             # Compute shrinkage weight
             alpha = self._shrinkage_alpha(n_samples, min_samples)
@@ -200,9 +260,10 @@ class DartsSGPCorrelationEstimator:
         DartsEngineError
             If the matrix has wrong shape or insufficient variance.
         """
-        if joint_outcome_matrix.ndim != 2 or joint_outcome_matrix.shape[1] != 7:
+        if joint_outcome_matrix.ndim != 2 or joint_outcome_matrix.shape[1] != N_MARKET_DIMS:
             raise DartsEngineError(
-                f"joint_outcome_matrix must be (N, 7), got {joint_outcome_matrix.shape}"
+                f"joint_outcome_matrix must be (N, {N_MARKET_DIMS}), "
+                f"got {joint_outcome_matrix.shape}"
             )
 
         n_samples = joint_outcome_matrix.shape[0]

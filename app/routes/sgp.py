@@ -3,14 +3,21 @@ Same-Game Parlay (SGP) pricing API routes — Sprint 4 full implementation.
 
 Endpoints
 ---------
-POST /api/v1/darts/sgp/price    — price a SGP using Gaussian copula
-POST /api/v1/darts/sgp/validate — validate SGP selections (no pricing)
-GET  /api/v1/darts/sgp/markets  — list supported SGP market types
+POST /api/v1/darts/sgp/price          — price a SGP using Gaussian copula
+POST /api/v1/darts/sgp/validate       — validate SGP selections (no pricing)
+GET  /api/v1/darts/sgp/markets        — list supported SGP market types
+GET  /api/v1/darts/sgp/combinations   — list popular SGP combination templates
 
 The SGP engine uses:
-  1. DartsSGPCorrelationEstimator to build the correlation matrix
+  1. DartsSGPCorrelationEstimator to build the 15x15 correlation matrix
   2. DartsSGPBuilder (Gaussian copula MC) for joint probability
   3. DartsMarginEngine for overround allocation
+
+Supported markets (15 total):
+  match_win, total_legs_over, handicap, 180_over, checkout_over, exact_score,
+  leg_winner_next, first_leg_winner, most_180s, highest_checkout,
+  total_180s_band, player_checkout_over, sets_over, break_of_throw,
+  nine_dart_finish
 """
 from __future__ import annotations
 
@@ -53,7 +60,9 @@ class SGPLeg(BaseModel):
         ...,
         description=(
             "Market type. One of: match_win, total_legs_over, handicap, "
-            "180_over, checkout_over, exact_score, leg_winner_next"
+            "180_over, checkout_over, exact_score, leg_winner_next, "
+            "first_leg_winner, most_180s, highest_checkout, total_180s_band, "
+            "player_checkout_over, sets_over, break_of_throw, nine_dart_finish"
         ),
     )
     outcome: str = Field(..., description="Human-readable outcome description")
@@ -306,11 +315,158 @@ async def list_sgp_markets() -> dict[str, Any]:
 
 
 _MARKET_DESCRIPTIONS: dict[str, str] = {
-    "match_win": "P(specified player wins the match)",
-    "total_legs_over": "P(total legs in match > O/U line)",
-    "handicap": "P(specified player covers the leg handicap)",
-    "180_over": "P(total 180s in match > O/U line)",
-    "checkout_over": "P(highest checkout in match > threshold)",
-    "exact_score": "P(match ends with exact leg score X-Y)",
-    "leg_winner_next": "P(specified player wins the next leg)",
+    # Original 7 markets
+    "match_win":            "P(specified player wins the match)",
+    "total_legs_over":      "P(total legs in match > O/U line)",
+    "handicap":             "P(specified player covers the leg handicap)",
+    "180_over":             "P(total 180s in match > O/U line)",
+    "checkout_over":        "P(highest checkout in match > threshold)",
+    "exact_score":          "P(match ends with exact leg score X-Y)",
+    "leg_winner_next":      "P(specified player wins the next leg)",
+    # Extended 8 markets (Sprint 4 expansion)
+    "first_leg_winner":     "P(specified player wins the opening leg of the match)",
+    "most_180s":            "P(specified player hits more 180s than their opponent)",
+    "highest_checkout":     "P(specified player achieves the highest checkout of the match)",
+    "total_180s_band":      "P(total 180s in match falls within a specific numeric band)",
+    "player_checkout_over": "P(player-specific highest checkout exceeds threshold)",
+    "sets_over":            "P(total sets in match > O/U line; sets-format matches only)",
+    "break_of_throw":       "P(at least one break of throw occurs in the match)",
+    "nine_dart_finish":     "P(a nine-dart finish is hit during the match)",
 }
+
+# Common SGP combination templates with correlation guidance.
+# These are the most commercially popular parlays on darts.
+_SGP_COMBINATION_TEMPLATES: list[dict] = [
+    {
+        "name": "First Leg Winner + Match Winner",
+        "markets": ["first_leg_winner", "match_win"],
+        "popularity": "very_high",
+        "correlation_note": (
+            "Moderate positive correlation (~0.35). Winning the first leg gives "
+            "momentum and a break of throw opportunity, boosting match win probability. "
+            "Do not treat as independent — the copula will correctly price the overlap."
+        ),
+        "example_odds_boost": "~0.80x versus naive multiplication",
+    },
+    {
+        "name": "Handicap + Total Legs",
+        "markets": ["handicap", "total_legs_over"],
+        "popularity": "high",
+        "correlation_note": (
+            "Positive correlation (~0.32). A dominant handicap cover is more likely "
+            "when the stronger player wins quickly (fewer legs), but a close match "
+            "with many legs is also possible when P2 wins several. The copula "
+            "captures this non-trivial dependency — naive multiplication will "
+            "over-price this parlay."
+        ),
+        "example_odds_boost": "~0.85x versus naive multiplication",
+    },
+    {
+        "name": "Match Winner + 180s Over",
+        "markets": ["match_win", "180_over"],
+        "popularity": "high",
+        "correlation_note": (
+            "Negative correlation (-0.40). The favourite winning decisively tends "
+            "to produce fewer legs and thus fewer total 180s. An over on 180s implies "
+            "a longer, more competitive match which slightly reduces the favourite's "
+            "win probability. The copula discounts the naive joint price accordingly."
+        ),
+        "example_odds_boost": "~1.05x versus naive multiplication (slight boost due to negative corr)",
+    },
+    {
+        "name": "First Leg Winner + Handicap",
+        "markets": ["first_leg_winner", "handicap"],
+        "popularity": "medium",
+        "correlation_note": (
+            "Moderate positive correlation (~0.20). Breaking throw in the first leg "
+            "contributes to handicap coverage but does not guarantee it."
+        ),
+        "example_odds_boost": "~0.88x versus naive multiplication",
+    },
+    {
+        "name": "180s Over + Total Legs Over",
+        "markets": ["180_over", "total_legs_over"],
+        "popularity": "medium",
+        "correlation_note": (
+            "Strong positive correlation (~0.38). More legs = more 180 opportunities. "
+            "Both sides winning legs is a precondition for both markets — naive pricing "
+            "significantly over-prices this parlay."
+        ),
+        "example_odds_boost": "~0.70x versus naive multiplication",
+    },
+    {
+        "name": "Checkout Over + Match Winner",
+        "markets": ["checkout_over", "match_win"],
+        "popularity": "medium",
+        "correlation_note": (
+            "Positive correlation (~0.58). Higher-average players hit bigger checkouts. "
+            "The match winner is likely the better player who also achieves the higher "
+            "checkout — this parlay is often under-priced by naive multiplication."
+        ),
+        "example_odds_boost": "~0.80x versus naive multiplication",
+    },
+    {
+        "name": "Break of Throw + Total Legs Over",
+        "markets": ["break_of_throw", "total_legs_over"],
+        "popularity": "medium",
+        "correlation_note": (
+            "Positive correlation (~0.42). Breaks of throw extend matches, making "
+            "this one of the more correlated two-leg SGPs. The copula provides "
+            "meaningful pricing correction versus the naive product."
+        ),
+        "example_odds_boost": "~0.75x versus naive multiplication",
+    },
+    {
+        "name": "Nine Dart Finish + 180s Over",
+        "markets": ["nine_dart_finish", "180_over"],
+        "popularity": "low",
+        "correlation_note": (
+            "Weak positive correlation (~0.18). A nine-dart finish requires three "
+            "180s in the same leg; a match with more 180s generally has more "
+            "nine-dart opportunities. Correlation is real but small — the copula "
+            "adjustment is modest (~5%)."
+        ),
+        "example_odds_boost": "~0.95x versus naive multiplication",
+    },
+]
+
+
+# ---------------------------------------------------------------------------
+# GET /sgp/combinations
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/sgp/combinations",
+    summary="List popular SGP combination templates with correlation guidance",
+    response_model=dict,
+    tags=["SGP"],
+)
+async def list_sgp_combinations() -> dict[str, Any]:
+    """
+    Return a catalogue of popular Same-Game Parlay combination templates.
+
+    Each template includes:
+    - The market pair / group
+    - Popularity tier (very_high / high / medium / low)
+    - A plain-language explanation of the correlation structure
+    - An indicative pricing adjustment factor relative to naive multiplication
+
+    These templates are for informational purposes only.  Actual pricing
+    must be obtained via POST /sgp/price which runs the Gaussian copula
+    Monte Carlo engine with the full 15x15 correlation matrix.
+
+    Combination types specifically modelled:
+    - first_leg_winner + match_win      (very common: moderate positive corr)
+    - handicap + total_legs_over        (positive corr, naive over-prices)
+    - match_win + 180_over              (negative corr, copula gives a slight boost)
+    """
+    return {
+        "combinations": _SGP_COMBINATION_TEMPLATES,
+        "n_combinations": len(_SGP_COMBINATION_TEMPLATES),
+        "note": (
+            "Correlation adjustments are directional guides only. "
+            "Use POST /sgp/price for accurate joint probability pricing."
+        ),
+        "pricing_endpoint": "/api/v1/darts/sgp/price",
+        "markets_endpoint": "/api/v1/darts/sgp/markets",
+    }

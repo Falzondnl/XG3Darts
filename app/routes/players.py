@@ -73,6 +73,206 @@ def _service_url(path: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# GET /players/rankings/pdc
+# GET /players/rankings/wdf
+# ---------------------------------------------------------------------------
+# These routes MUST be registered before /players/{player_id} to prevent
+# FastAPI matching "rankings" as a player_id path parameter.
+
+@router.get(
+    "/players/rankings/pdc",
+    summary="Top 50 PDC-ranked players",
+    response_description="Top 50 PDC players ordered by dartsorakel_rank ascending",
+    tags=["Players"],
+)
+async def get_pdc_rankings(
+    limit: int = Query(50, ge=1, le=200, description="Maximum players to return"),
+    session: AsyncSession = Depends(get_session_dependency),
+) -> dict[str, Any]:
+    """
+    Return the top PDC-ranked players from the database, ordered by
+    ``dartsorakel_rank`` ascending (rank 1 = world number 1).
+
+    Players with a NULL ``dartsorakel_rank`` are excluded from this endpoint;
+    use ``GET /players/search`` to find players without a ranking.
+
+    Includes: player_id, slug, nickname, pdc_ranking, dartsorakel_rank,
+    dartsorakel_3da, tour_card_holder, source_confidence, country_code.
+
+    Parameters
+    ----------
+    limit:
+        Maximum number of players to return (default 50, max 200).
+
+    Raises
+    ------
+    HTTPException(503)
+        If the database is unavailable.
+    """
+    from sqlalchemy import text as sql_text
+
+    logger.info("pdc_rankings_request", limit=limit)
+
+    try:
+        result = await session.execute(
+            sql_text(
+                """
+                SELECT
+                    p.id,
+                    p.slug,
+                    p.nickname,
+                    p.pdc_ranking,
+                    p.dartsorakel_rank,
+                    p.dartsorakel_3da,
+                    p.tour_card_holder,
+                    p.source_confidence,
+                    p.country_code,
+                    p.pdc_id
+                FROM darts_players p
+                WHERE p.dartsorakel_rank IS NOT NULL
+                  AND p.gdpr_anonymized = FALSE
+                ORDER BY p.dartsorakel_rank ASC
+                LIMIT :limit
+                """
+            ),
+            {"limit": limit},
+        )
+        rows = result.fetchall()
+
+        players = [
+            {
+                "rank": row[4],
+                "player_id": row[0],
+                "slug": row[1],
+                "nickname": row[2],
+                "pdc_ranking": row[3],
+                "dartsorakel_rank": row[4],
+                "dartsorakel_3da": row[5],
+                "tour_card_holder": row[6],
+                "source_confidence": row[7],
+                "country_code": row[8],
+                "pdc_id": row[9],
+                "_links": {
+                    "profile": _service_url(f"/players/{row[0]}"),
+                    "elo": _service_url(f"/players/{row[0]}/elo"),
+                    "regime": _service_url(f"/players/{row[0]}/regime"),
+                },
+            }
+            for row in rows
+        ]
+
+        return {
+            "ranking_type": "pdc",
+            "ordered_by": "dartsorakel_rank ASC",
+            "count": len(players),
+            "limit": limit,
+            "players": players,
+        }
+
+    except Exception as exc:
+        logger.error("pdc_rankings_error", error=str(exc))
+        raise HTTPException(
+            status_code=503,
+            detail="Database unavailable — PDC rankings cannot be retrieved.",
+        )
+
+
+@router.get(
+    "/players/rankings/wdf",
+    summary="Top 50 WDF-ranked players",
+    response_description="Top 50 WDF players ordered by dartsorakel_rank ascending",
+    tags=["Players"],
+)
+async def get_wdf_rankings(
+    limit: int = Query(50, ge=1, le=200, description="Maximum players to return"),
+    session: AsyncSession = Depends(get_session_dependency),
+) -> dict[str, Any]:
+    """
+    Return the top WDF-ranked players from the database, ordered by
+    ``dartsorakel_rank`` ascending.
+
+    WDF players are identified by ``primary_source = 'wdf'``.  Players
+    with a NULL ``dartsorakel_rank`` are excluded.
+
+    Includes: player_id, slug, nickname, dartsorakel_rank, dartsorakel_3da,
+    source_confidence, country_code.
+
+    Parameters
+    ----------
+    limit:
+        Maximum number of players to return (default 50, max 200).
+
+    Raises
+    ------
+    HTTPException(503)
+        If the database is unavailable.
+    """
+    from sqlalchemy import text as sql_text
+
+    logger.info("wdf_rankings_request", limit=limit)
+
+    try:
+        result = await session.execute(
+            sql_text(
+                """
+                SELECT
+                    p.id,
+                    p.slug,
+                    p.nickname,
+                    p.dartsorakel_rank,
+                    p.dartsorakel_3da,
+                    p.source_confidence,
+                    p.country_code,
+                    p.primary_source
+                FROM darts_players p
+                WHERE p.primary_source = 'wdf'
+                  AND p.dartsorakel_rank IS NOT NULL
+                  AND p.gdpr_anonymized = FALSE
+                ORDER BY p.dartsorakel_rank ASC
+                LIMIT :limit
+                """
+            ),
+            {"limit": limit},
+        )
+        rows = result.fetchall()
+
+        players = [
+            {
+                "rank": row[3],
+                "player_id": row[0],
+                "slug": row[1],
+                "nickname": row[2],
+                "dartsorakel_rank": row[3],
+                "dartsorakel_3da": row[4],
+                "source_confidence": row[5],
+                "country_code": row[6],
+                "primary_source": row[7],
+                "_links": {
+                    "profile": _service_url(f"/players/{row[0]}"),
+                    "elo": _service_url(f"/players/{row[0]}/elo"),
+                    "regime": _service_url(f"/players/{row[0]}/regime"),
+                },
+            }
+            for row in rows
+        ]
+
+        return {
+            "ranking_type": "wdf",
+            "ordered_by": "dartsorakel_rank ASC",
+            "count": len(players),
+            "limit": limit,
+            "players": players,
+        }
+
+    except Exception as exc:
+        logger.error("wdf_rankings_error", error=str(exc))
+        raise HTTPException(
+            status_code=503,
+            detail="Database unavailable — WDF rankings cannot be retrieved.",
+        )
+
+
 @router.get(
     "/players/{player_id}",
     summary="Get player profile and statistics",

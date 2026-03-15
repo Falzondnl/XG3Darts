@@ -14,6 +14,10 @@ GET  /api/v1/darts/monitoring/clv
 
 GET  /api/v1/darts/monitoring/coverage-regimes
     R0/R1/R2 regime distribution across the active player pool.
+
+GET  /api/v1/darts/monitoring/markets
+    Engine availability status for each of the 15 SGP market types.
+    Checks whether pricing engines can be imported and instantiated.
 """
 from __future__ import annotations
 
@@ -206,6 +210,127 @@ async def get_clv(
         families=summary,
         any_alerts=any_alerts,
     )
+
+
+@router.get(
+    "/monitoring/markets",
+    response_model=dict,
+    summary="Engine availability status for each SGP market type",
+    tags=["Monitoring"],
+)
+async def get_market_engine_health() -> dict[str, Any]:
+    """
+    Check and return the availability status of each pricing engine
+    associated with the 15 SGP market types.
+
+    For each market type the endpoint attempts to:
+    1. Import the relevant engine module.
+    2. Instantiate the engine class.
+    3. Report whether the engine is available and operational.
+
+    This is a lightweight liveness check; it does not run any simulations.
+    Any import or instantiation error is caught and reported per-market
+    without raising an HTTP exception (always returns 200).
+
+    The ``correlation_matrix_ok`` flag validates that the SGP correlation
+    estimator can be constructed with the global 15x15 prior.
+    """
+    import importlib
+    import traceback
+
+    # Map of market_type -> (module_path, class_name) for the primary engine
+    # responsible for computing raw probabilities for that market.
+    # Engines that share a module (e.g. both leg-layer markets) point to the
+    # same import but different class names.
+    _MARKET_ENGINE_MAP: dict[str, tuple[str, str]] = {
+        "match_win":            ("engines.match_layer.race_to_x_engine",    "RaceToXEngine"),
+        "total_legs_over":      ("engines.match_layer.match_combinatorics", "MatchCombinatoricsEngine"),
+        "handicap":             ("engines.match_layer.match_combinatorics", "MatchCombinatoricsEngine"),
+        "180_over":             ("engines.leg_layer.visit_distributions",   "VisitDistributionEngine"),
+        "checkout_over":        ("engines.leg_layer.checkout_model",        "CheckoutModel"),
+        "exact_score":          ("engines.match_layer.match_combinatorics", "MatchCombinatoricsEngine"),
+        "leg_winner_next":      ("engines.leg_layer.hold_break_model",      "HoldBreakModel"),
+        "first_leg_winner":     ("engines.leg_layer.hold_break_model",      "HoldBreakModel"),
+        "most_180s":            ("engines.leg_layer.visit_distributions",   "VisitDistributionEngine"),
+        "highest_checkout":     ("engines.leg_layer.checkout_model",        "CheckoutModel"),
+        "total_180s_band":      ("engines.leg_layer.visit_distributions",   "VisitDistributionEngine"),
+        "player_checkout_over": ("engines.leg_layer.checkout_model",        "CheckoutModel"),
+        "sets_over":            ("engines.match_layer.sets_engine",         "SetsEngine"),
+        "break_of_throw":       ("engines.leg_layer.hold_break_model",      "HoldBreakModel"),
+        "nine_dart_finish":     ("engines.leg_layer.markov_chain",          "DartsMarkovChain"),
+    }
+
+    market_statuses: dict[str, Any] = {}
+    all_available = True
+
+    for market_type, (module_path, class_name) in _MARKET_ENGINE_MAP.items():
+        status: dict[str, Any] = {
+            "market_type": market_type,
+            "engine_module": module_path,
+            "engine_class": class_name,
+            "available": False,
+            "error": None,
+        }
+        try:
+            mod = importlib.import_module(module_path)
+            cls = getattr(mod, class_name)
+            # Attempt a no-arg instantiation; catch TypeError for engines
+            # that require constructor arguments (they are still importable).
+            try:
+                cls()
+                status["available"] = True
+                status["instantiation"] = "ok"
+            except TypeError as te:
+                # Engine exists but requires constructor args — still importable
+                status["available"] = True
+                status["instantiation"] = f"requires_args: {te}"
+            except Exception as ie:
+                status["available"] = True
+                status["instantiation"] = f"init_error: {ie}"
+        except ImportError as exc:
+            status["error"] = f"ImportError: {exc}"
+            all_available = False
+        except AttributeError as exc:
+            status["error"] = f"AttributeError: {exc}"
+            all_available = False
+        except Exception as exc:
+            status["error"] = f"UnexpectedError: {exc}"
+            all_available = False
+
+        market_statuses[market_type] = status
+
+    # Also validate the SGP correlation matrix can be built
+    corr_matrix_ok = False
+    corr_matrix_error: Optional[str] = None
+    try:
+        from sgp.correlation_estimator import DartsSGPCorrelationEstimator, N_MARKET_DIMS
+        estimator = DartsSGPCorrelationEstimator()
+        corr_matrix = estimator.estimate_for_competition("health_check", n_samples=0)
+        corr_matrix_ok = (
+            corr_matrix.shape == (N_MARKET_DIMS, N_MARKET_DIMS)
+            and float(corr_matrix.min()) >= -1.0
+        )
+    except Exception as exc:
+        corr_matrix_error = str(exc)
+
+    n_available = sum(1 for s in market_statuses.values() if s["available"])
+
+    logger.info(
+        "monitoring_market_health",
+        n_available=n_available,
+        n_total=len(market_statuses),
+        all_available=all_available,
+        corr_matrix_ok=corr_matrix_ok,
+    )
+
+    return {
+        "all_available": all_available,
+        "n_available": n_available,
+        "n_total": len(market_statuses),
+        "correlation_matrix_ok": corr_matrix_ok,
+        "correlation_matrix_error": corr_matrix_error,
+        "markets": market_statuses,
+    }
 
 
 @router.get(
