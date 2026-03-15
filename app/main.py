@@ -21,6 +21,7 @@ from fastapi.responses import JSONResponse
 from app.config import settings
 from app.routes import (
     events,
+    liability,
     live,
     monitoring,
     outrights,
@@ -28,6 +29,7 @@ from app.routes import (
     prematch,
     props,
     sgp,
+    trader,
     worldcup,
 )
 from app.routes.monitoring import router as monitoring_router
@@ -130,7 +132,7 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=["*"] if settings.is_development else [],
         allow_credentials=True,
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "PATCH", "DELETE"],
         allow_headers=["*"],
     )
 
@@ -181,6 +183,8 @@ def create_app() -> FastAPI:
     app.include_router(worldcup.router, prefix=api_prefix, tags=["World Cup"])
     app.include_router(players.router, prefix=api_prefix, tags=["Players"])
     app.include_router(monitoring_router, prefix=api_prefix, tags=["Monitoring"])
+    app.include_router(liability.router, prefix=api_prefix, tags=["Liability"])
+    app.include_router(trader.router, prefix=api_prefix, tags=["Trader"])
 
     # Health / readiness (no versioned prefix — checked by load balancers)
     @app.get("/health", include_in_schema=False)

@@ -45,7 +45,12 @@ def _db_url_sync(url: str) -> str:
 
 
 def load_all_data(conn) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Load matches + player stats."""
+    """Load matches + player stats.
+
+    Includes both PDC (status='Completed') and DartsDatabase (status='result')
+    matches. Per-match averages from raw_source_data are extracted for
+    DartsDatabase rows to enrich the rolling 3DA features.
+    """
     log.info("loading_matches")
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute("""
@@ -54,10 +59,14 @@ def load_all_data(conn) -> tuple[pd.DataFrame, pd.DataFrame]:
                 m.player1_id, m.player2_id, m.winner_player_id,
                 m.match_date, m.player1_score, m.player2_score,
                 m.coverage_regime,
+                m.source_name,
+                -- Per-match averages from DartsDatabase raw data (NULL for PDC rows)
+                (m.raw_source_data->>'player1_avg')::float AS match_avg_p1,
+                (m.raw_source_data->>'player2_avg')::float AS match_avg_p2,
                 c.format_code, c.ecosystem, c.season_year, c.is_televised
             FROM darts_matches m
             JOIN darts_competitions c ON c.id = m.competition_id
-            WHERE m.status = 'Completed'
+            WHERE m.status IN ('Completed', 'result')
               AND m.winner_player_id IS NOT NULL
               AND m.player1_id IS NOT NULL
               AND m.player2_id IS NOT NULL
@@ -65,22 +74,48 @@ def load_all_data(conn) -> tuple[pd.DataFrame, pd.DataFrame]:
             ORDER BY m.match_date ASC
         """)
         matches = pd.DataFrame(cur.fetchall())
-    log.info("matches_loaded", count=len(matches))
+    log.info("matches_loaded", count=len(matches),
+             pdc=int((matches["source_name"] == "pdc").sum()),
+             dartsdatabase=int((matches["source_name"] == "dartsdatabase").sum()))
 
     log.info("loading_player_stats")
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        # Also pull the best available 3DA: dartsorakel_3da first, then
+        # the latest three_dart_average from darts_player_stats as fallback.
         cur.execute("""
-            SELECT p.id AS player_id,
-                   p.dartsorakel_3da, p.dartsorakel_rank, p.pdc_ranking,
-                   p.source_confidence, p.country_code,
-                   e.rating_after AS elo_rating,
-                   e.games_played_at_time
+            SELECT
+                p.id AS player_id,
+                p.dartsorakel_3da,
+                p.dartsorakel_rank,
+                p.pdc_ranking,
+                p.source_confidence,
+                p.country_code,
+                e.rating_after AS elo_rating,
+                e.games_played_at_time,
+                -- Fallback 3DA: latest dartsdatabase per-match stat
+                COALESCE(
+                    p.dartsorakel_3da,
+                    (SELECT AVG(ps.three_dart_average)
+                     FROM darts_player_stats ps
+                     WHERE ps.player_id = p.id
+                       AND ps.three_dart_average IS NOT NULL
+                    )
+                ) AS best_3da
             FROM darts_players p
             LEFT JOIN darts_elo_ratings e
                 ON e.player_id = p.id AND e.pool = 'pdc_mens'
         """)
-        stats = pd.DataFrame(cur.fetchall()).set_index("player_id")
-    log.info("stats_loaded", count=len(stats))
+        df_stats = pd.DataFrame(cur.fetchall())
+    # Deduplicate: keep the ELO row with highest games_played_at_time per player
+    if "games_played_at_time" in df_stats.columns:
+        df_stats = (
+            df_stats
+            .sort_values("games_played_at_time", ascending=False, na_position="last")
+            .drop_duplicates(subset="player_id", keep="first")
+        )
+    stats = df_stats.set_index("player_id")
+    log.info("stats_loaded", count=len(stats),
+             with_3da=int(stats["best_3da"].notna().sum()))
     return matches, stats
 
 
@@ -102,6 +137,10 @@ def build_r1_features(matches: pd.DataFrame, stats: pd.DataFrame) -> tuple[np.nd
                 except (ValueError, TypeError):
                     pass
         return default
+
+    def gs3da(pid) -> float:
+        """Best available 3DA: dartsorakel → DB avg → default."""
+        return gs(pid, "best_3da", DEFAULT_3DA)
 
     # Format encoding
     def format_enc(fmt):
@@ -136,10 +175,15 @@ def build_r1_features(matches: pd.DataFrame, stats: pd.DataFrame) -> tuple[np.nd
         # --- Static features ---
         elo1 = gs(p1, "elo_rating", DEFAULT_ELO)
         elo2 = gs(p2, "elo_rating", DEFAULT_ELO)
-        da1  = gs(p1, "dartsorakel_3da", DEFAULT_3DA)
-        da2  = gs(p2, "dartsorakel_3da", DEFAULT_3DA)
+        da1  = gs3da(p1)
+        da2  = gs3da(p2)
         r1   = gs(p1, "pdc_ranking", 200.0) or 200.0
         r2   = gs(p2, "pdc_ranking", 200.0) or 200.0
+        # Per-match averages from DartsDatabase (NaN for PDC rows → fall back to career avg)
+        match_da1 = row.get("match_avg_p1")
+        match_da2 = row.get("match_avg_p2")
+        match_da1 = float(match_da1) if pd.notna(match_da1) and match_da1 else da1
+        match_da2 = float(match_da2) if pd.notna(match_da2) and match_da2 else da2
         fmt  = str(row.get("format_code", "") or "")
         eco  = str(row.get("ecosystem", "") or "pdc_mens")
         is_tv = bool(row.get("is_televised", False))
@@ -247,11 +291,13 @@ def build_r1_features(matches: pd.DataFrame, stats: pd.DataFrame) -> tuple[np.nd
         labels.append(1.0 if winner == p1 else 0.0)
 
         # Update histories (AFTER recording feature to avoid leakage)
+        # Use per-match averages for history when available (DartsDatabase rows)
+        # so future rolling_3da values benefit from actual match performance.
         p1_won = (winner == p1)
         p2_won = (winner == p2)
-        rec1 = dict(won=p1_won, da=da1, co=0.40, opp_elo=elo2,
+        rec1 = dict(won=p1_won, da=match_da1, co=0.40, opp_elo=elo2,
                     televised=is_tv, date=mdate, was_starter=True)
-        rec2 = dict(won=p2_won, da=da2, co=0.40, opp_elo=elo1,
+        rec2 = dict(won=p2_won, da=match_da2, co=0.40, opp_elo=elo1,
                     televised=is_tv, date=mdate, was_starter=False)
         player_history[p1].append(rec1)
         player_history[p2].append(rec2)
@@ -267,10 +313,11 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--n-matches", type=int, default=0, help="Limit matches (0=all)")
+    parser.add_argument("--db-url", default=None, help="Override DATABASE_URL (e.g. public proxy)")
     args = parser.parse_args()
 
-    db_url = _db_url_sync(settings.DATABASE_URL)
-    conn = psycopg2.connect(db_url, connect_timeout=30)
+    db_url = _db_url_sync(args.db_url or settings.DATABASE_URL)
+    conn = psycopg2.connect(db_url, connect_timeout=60)
     matches, stats = load_all_data(conn)
     conn.close()
 
@@ -346,8 +393,10 @@ def main() -> None:
         "feature_count": X.shape[1],
         "trained_at": datetime.now(timezone.utc).isoformat(),
         "train_size": len(X_train),
+        "total_matches": len(X),
         "brier_test": brier,
         "auc_test": auc,
+        "note": "Trained on PDC (276k) + DartsDatabase (5.4k) with best_3da feature",
     }, save_dir / "r1_model.pkl")
     log.info("r1_saved", path=str(save_dir / "r1_model.pkl"))
 

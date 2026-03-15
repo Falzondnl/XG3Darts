@@ -427,3 +427,109 @@ async def get_live_markets(
         draw_available=state.draw_enabled,
         state_summary=state_summary,
     )
+
+
+# ---------------------------------------------------------------------------
+# In-play proposition markets
+# ---------------------------------------------------------------------------
+
+class InPlayPropMarketResponse(BaseModel):
+    """A single in-play proposition market."""
+
+    market_key: str
+    market_label: str
+    outcomes: dict[str, float]
+    is_open: bool
+    data_gate_reason: Optional[str]
+    metadata: dict[str, Any]
+
+
+class InPlayPropsResponse(BaseModel):
+    """All granular in-play proposition markets for a match state."""
+
+    match_id: str
+    current_leg: int
+    sets_p1: int
+    sets_p2: int
+    score_p1: int
+    score_p2: int
+    open_market_count: int
+    markets: list[InPlayPropMarketResponse]
+
+
+@router.get(
+    "/live/inplay-props/{match_id}",
+    response_model=InPlayPropsResponse,
+    summary="Get all granular in-play proposition markets for a match",
+)
+async def get_inplay_props(
+    match_id: str = Path(..., description="Match identifier"),
+) -> InPlayPropsResponse:
+    """
+    Return all per-leg/per-set proposition markets for an in-progress match.
+
+    Markets include:
+    - ``next_leg_winner``      — who wins the current leg
+    - ``next_set_winner``      — who wins the current set (set-format only)
+    - ``leg_180_count``        — over/under 180s remaining in this leg
+    - ``first_180_in_leg``     — who hits the first 180
+    - ``leg_checkout``         — who finishes first, and checkout score bands
+    - ``nine_darter``          — probability of a nine-darter in this leg
+    - ``live_leg_handicap``    — updated handicap from current leg state
+    - ``set_correct_score``    — correct score for current set (set-format only)
+
+    All prices include the standard in-play overround margin (4%).
+
+    Raises
+    ------
+    404 Not Found
+        When no live state exists for the given match_id.
+    """
+    from engines.live.inplay_props import InPlayPropsEngine
+
+    engine = _get_live_engine()
+    state = await engine.get_state(match_id)
+
+    if state is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "match_not_found", "match_id": match_id},
+        )
+
+    try:
+        props_engine = InPlayPropsEngine()
+        result = props_engine.compute(state)
+    except DartsDataError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "data_gate_failed", "message": str(exc)},
+        )
+    except DartsEngineError as exc:
+        logger.error("inplay_props_engine_error", match_id=match_id, error=str(exc))
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "engine_error", "message": str(exc)},
+        )
+
+    market_responses = [
+        InPlayPropMarketResponse(
+            market_key=m.market_key,
+            market_label=m.market_label,
+            outcomes=m.outcomes,
+            is_open=m.is_open,
+            data_gate_reason=m.data_gate_reason,
+            metadata=m.metadata,
+        )
+        for m in result.markets
+    ]
+
+    return InPlayPropsResponse(
+        match_id=match_id,
+        current_leg=result.current_leg,
+        sets_p1=result.current_set_p1,
+        sets_p2=result.current_set_p2,
+        score_p1=result.score_p1,
+        score_p2=result.score_p2,
+        open_market_count=len(result.open_markets()),
+        markets=market_responses,
+    )
