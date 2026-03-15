@@ -18,8 +18,13 @@ POST /api/v1/darts/prematch/price            — match winner market
 POST /api/v1/darts/prematch/exact-score      — correct score market
 POST /api/v1/darts/prematch/handicap         — leg handicap market
 POST /api/v1/darts/prematch/totals           — total legs O/U
+POST /api/v1/darts/prematch/multi-totals     — all O/U lines in one call (Pinnacle-style)
 POST /api/v1/darts/prematch/180s             — match 180 O/U
 POST /api/v1/darts/prematch/checkout         — highest checkout O/U
+POST /api/v1/darts/prematch/first-leg        — first leg winner market
+POST /api/v1/darts/prematch/both-to-score    — both players score X+ legs
+POST /api/v1/darts/prematch/race-to-x        — race-to-X legs market
+POST /api/v1/darts/prematch/winning-margin   — winning margin distribution
 POST /api/v1/darts/prematch/ecosystem-price  — ecosystem-aware match pricing
 GET  /api/v1/darts/prematch/markets/{match_id} — all markets for a fixture
 """
@@ -108,6 +113,47 @@ class HighestCheckoutRequest(MatchPriceRequest):
     p2_legs_observed: int = Field(default=50, ge=0)
     p1_confidence: float = Field(default=0.7, ge=0.0, le=1.0)
     p2_confidence: float = Field(default=0.7, ge=0.0, le=1.0)
+
+
+class FirstLegRequest(BaseModel):
+    """First leg winner market request."""
+    competition_code: str
+    round_name: str = "Final"
+    p1_id: str
+    p2_id: str
+    p1_three_da: float = Field(..., gt=0, lt=200)
+    p2_three_da: float = Field(..., gt=0, lt=200)
+    p1_starts_first: bool = True
+    base_margin: float = Field(default=0.05, gt=0.0, le=0.15)
+    double_start_required: Optional[bool] = None
+
+
+class BothToScoreRequest(BaseModel):
+    """Both players to score at least X legs market."""
+    competition_code: str
+    round_name: str = "Final"
+    p1_id: str
+    p2_id: str
+    p1_three_da: float = Field(..., gt=0, lt=200)
+    p2_three_da: float = Field(..., gt=0, lt=200)
+    p1_starts_first: bool = True
+    min_legs_each: int = Field(default=3, ge=1, le=12,
+                               description="Both players must reach at least this many legs")
+    base_margin: float = Field(default=0.05, gt=0.0, le=0.15)
+    double_start_required: Optional[bool] = None
+
+
+class MultiLegLineRequest(BaseModel):
+    """Return O/U odds for multiple leg totals simultaneously (Pinnacle-style multi-line)."""
+    competition_code: str
+    round_name: str = "Final"
+    p1_id: str
+    p2_id: str
+    p1_three_da: float = Field(..., gt=0, lt=200)
+    p2_three_da: float = Field(..., gt=0, lt=200)
+    p1_starts_first: bool = True
+    base_margin: float = Field(default=0.04, gt=0.0, le=0.15)
+    double_start_required: Optional[bool] = None
 
 
 # ---------------------------------------------------------------------------
@@ -579,19 +625,25 @@ async def get_prematch_markets(match_id: str) -> dict[str, Any]:
     return {
         "match_id": match_id,
         "available_markets": [
-            "match_winner",
-            "correct_score",
-            "handicap",
-            "total_legs",
-            "180s",
-            "highest_checkout",
+            {"id": "match_winner",      "endpoint": "/prematch/price",         "tier": 1},
+            {"id": "correct_score",     "endpoint": "/prematch/exact-score",   "tier": 1},
+            {"id": "handicap",          "endpoint": "/prematch/handicap",      "tier": 1},
+            {"id": "total_legs",        "endpoint": "/prematch/totals",        "tier": 1},
+            {"id": "multi_totals",      "endpoint": "/prematch/multi-totals",  "tier": 1},
+            {"id": "first_leg_winner",  "endpoint": "/prematch/first-leg",     "tier": 1},
+            {"id": "both_to_score",     "endpoint": "/prematch/both-to-score", "tier": 1},
+            {"id": "race_to_x",         "endpoint": "/prematch/race-to-x",    "tier": 1},
+            {"id": "winning_margin",    "endpoint": "/prematch/winning-margin","tier": 1},
+            {"id": "180s",              "endpoint": "/prematch/180s",          "tier": 1},
+            {"id": "highest_checkout",  "endpoint": "/prematch/checkout",      "tier": 1},
+            {"id": "nine_darter_prop",  "endpoint": "/props/nine-darter",      "tier": 2},
+            {"id": "most_180s",         "endpoint": "/props/most-180s",        "tier": 2},
+            {"id": "checkout_range",    "endpoint": "/props/checkout-range",   "tier": 2},
+            {"id": "sgp",               "endpoint": "/sgp/price",              "tier": 2},
         ],
+        "total_markets": 15,
         "status": "markets_available",
-        "pricing_endpoint": f"/api/v1/darts/prematch/price",
-        "note": (
-            "POST to /prematch/price with competition_code, round_name, "
-            "player IDs and 3DA values to receive computed prices."
-        ),
+        "base_pricing_endpoint": "/api/v1/darts/prematch/price",
     }
 
 
@@ -1226,5 +1278,271 @@ async def winning_margin(request: WinningMarginRequest) -> dict[str, Any]:
         "decimal_odds": {
             k: round(1.0 / v, 4) if v > 1e-9 else None for k, v in adj.items()
         },
+        "applied_margin": round(request.base_margin, 5),
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /prematch/first-leg — First leg winner market
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/prematch/first-leg",
+    summary="First leg winner market",
+    tags=["Pre-Match"],
+)
+async def price_first_leg(request: FirstLegRequest) -> dict[str, Any]:
+    """
+    Price the first leg winner market.
+
+    The first leg probability is the hold/break probability of the opening
+    server: if P1 starts first, P(P1 wins leg 1) = P1's hold probability.
+
+    Offered by Pinnacle, bet365, and Unibet for all major darts tournaments.
+    """
+    hb_req = MatchPriceRequest(
+        competition_code=request.competition_code,
+        round_name=request.round_name,
+        p1_id=request.p1_id,
+        p2_id=request.p2_id,
+        p1_three_da=request.p1_three_da,
+        p2_three_da=request.p2_three_da,
+        p1_starts_first=request.p1_starts_first,
+        regime=0,
+        starter_confidence=1.0,
+        source_confidence=1.0,
+        model_agreement=1.0,
+        market_liquidity="high",
+        base_margin=request.base_margin,
+        double_start_required=request.double_start_required,
+    )
+    hb, fmt = _compute_hold_break(hb_req)
+
+    if request.p1_starts_first:
+        p1_true = hb.p1_hold
+        p2_true = 1.0 - hb.p1_hold
+    else:
+        p1_true = 1.0 - hb.p2_hold
+        p2_true = hb.p2_hold
+
+    adj = _margin_engine.apply(
+        true_probs={"p1_wins_leg1": p1_true, "p2_wins_leg1": p2_true},
+        regime=0,
+        base_margin=request.base_margin,
+    )
+
+    return {
+        "market": "first_leg_winner",
+        "competition_code": request.competition_code,
+        "round_name": request.round_name,
+        "p1_id": request.p1_id,
+        "p2_id": request.p2_id,
+        "p1_starts_first": request.p1_starts_first,
+        "true_probabilities": {
+            "p1_wins_leg1": round(p1_true, 6),
+            "p2_wins_leg1": round(p2_true, 6),
+        },
+        "adjusted_probabilities": {k: round(v, 6) for k, v in adj.items()},
+        "decimal_odds": {
+            "p1_wins_leg1": round(1.0 / adj["p1_wins_leg1"], 4) if adj.get("p1_wins_leg1", 0) > 1e-9 else None,
+            "p2_wins_leg1": round(1.0 / adj["p2_wins_leg1"], 4) if adj.get("p2_wins_leg1", 0) > 1e-9 else None,
+        },
+        "applied_margin": round(request.base_margin, 5),
+        "model_inputs": {
+            "p1_hold": round(hb.p1_hold, 6),
+            "p2_hold": round(hb.p2_hold, 6),
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /prematch/both-to-score — Both players to reach X legs market
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/prematch/both-to-score",
+    summary="Both players to score at least X legs",
+    tags=["Pre-Match"],
+)
+async def price_both_to_score(request: BothToScoreRequest) -> dict[str, Any]:
+    """
+    Price 'both players to score X+ legs' market using exact DP.
+
+    Covers markets like 'both to score 3+', 'both to score 5+'.
+    Offered by Pinnacle, bet365, Unibet for PDC Premier League and WC formats.
+    """
+    from functools import lru_cache
+
+    hb_req = MatchPriceRequest(
+        competition_code=request.competition_code,
+        round_name=request.round_name,
+        p1_id=request.p1_id,
+        p2_id=request.p2_id,
+        p1_three_da=request.p1_three_da,
+        p2_three_da=request.p2_three_da,
+        p1_starts_first=request.p1_starts_first,
+        regime=0,
+        starter_confidence=1.0,
+        source_confidence=1.0,
+        model_agreement=1.0,
+        market_liquidity="high",
+        base_margin=request.base_margin,
+        double_start_required=request.double_start_required,
+    )
+    hb, fmt = _compute_hold_break(hb_req)
+
+    legs_to_win = getattr(fmt, "legs_to_win", None) or getattr(fmt, "legs_per_set", 7)
+    n = request.min_legs_each
+
+    if n >= legs_to_win:
+        raise HTTPException(
+            status_code=422,
+            detail=f"min_legs_each={n} >= legs_to_win={legs_to_win}."
+        )
+
+    p1_hold = hb.p1_hold
+    p1_break = 1.0 - hb.p2_hold
+
+    @lru_cache(maxsize=None)
+    def p_both(a: int, b: int, sv: int) -> float:
+        if a >= legs_to_win:
+            return 1.0 if b >= n else 0.0
+        if b >= legs_to_win:
+            return 1.0 if a >= n else 0.0
+        p = p1_hold if sv == 1 else p1_break
+        ns = 2 if sv == 1 else 1
+        return p * p_both(a+1, b, ns) + (1-p) * p_both(a, b+1, ns)
+
+    sv0 = 1 if request.p1_starts_first else 2
+    p_yes = p_both(0, 0, sv0)
+    p_no = 1.0 - p_yes
+
+    adj = _margin_engine.apply(
+        true_probs={"yes": p_yes, "no": p_no},
+        regime=0,
+        base_margin=request.base_margin,
+    )
+
+    return {
+        "market": "both_to_score",
+        "min_legs_each": n,
+        "competition_code": request.competition_code,
+        "round_name": request.round_name,
+        "p1_id": request.p1_id,
+        "p2_id": request.p2_id,
+        "legs_to_win": legs_to_win,
+        "true_probabilities": {
+            "yes_both_score": round(p_yes, 6),
+            "no": round(p_no, 6),
+        },
+        "adjusted_probabilities": {k: round(v, 6) for k, v in adj.items()},
+        "decimal_odds": {
+            "yes": round(1.0 / adj["yes"], 4) if adj.get("yes", 0) > 1e-9 else None,
+            "no": round(1.0 / adj["no"], 4) if adj.get("no", 0) > 1e-9 else None,
+        },
+        "applied_margin": round(request.base_margin, 5),
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /prematch/multi-totals — Multiple O/U leg lines (Pinnacle-style)
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/prematch/multi-totals",
+    summary="All total legs O/U lines in one call (Pinnacle-style)",
+    tags=["Pre-Match"],
+)
+async def price_multi_totals(request: MultiLegLineRequest) -> dict[str, Any]:
+    """
+    Return over/under odds for all available leg total lines in a single call.
+
+    Pinnacle lists 4-6 O/U total lines per match. This endpoint returns all
+    lines with full Shin margin applied, suitable for direct display.
+
+    Score distribution is computed via forward DP (exact, not Monte Carlo).
+    """
+    hb_req = MatchPriceRequest(
+        competition_code=request.competition_code,
+        round_name=request.round_name,
+        p1_id=request.p1_id,
+        p2_id=request.p2_id,
+        p1_three_da=request.p1_three_da,
+        p2_three_da=request.p2_three_da,
+        p1_starts_first=request.p1_starts_first,
+        regime=0,
+        starter_confidence=1.0,
+        source_confidence=1.0,
+        model_agreement=1.0,
+        market_liquidity="high",
+        base_margin=request.base_margin,
+        double_start_required=request.double_start_required,
+    )
+    hb, fmt = _compute_hold_break(hb_req)
+
+    legs_to_win = getattr(fmt, "legs_to_win", None) or getattr(fmt, "legs_per_set", 7)
+    min_total = legs_to_win
+    max_total = 2 * legs_to_win - 1
+
+    p1_hold = hb.p1_hold
+    p1_break = 1.0 - hb.p2_hold
+
+    # Forward DP: track probability mass at each state
+    sv0 = 1 if request.p1_starts_first else 2
+    states: dict[tuple[int, int, int], float] = {(0, 0, sv0): 1.0}
+    score_dist: dict[int, float] = {}
+
+    while states:
+        new_states: dict[tuple[int, int, int], float] = {}
+        for (a, b, sv), prob in states.items():
+            p = p1_hold if sv == 1 else p1_break
+            ns = 2 if sv == 1 else 1
+            for leg_winner, p_leg in ((1, p), (2, 1 - p)):
+                na = a + (1 if leg_winner == 1 else 0)
+                nb = b + (1 if leg_winner == 2 else 0)
+                if na >= legs_to_win or nb >= legs_to_win:
+                    total = na + nb
+                    score_dist[total] = score_dist.get(total, 0.0) + prob * p_leg
+                else:
+                    k = (na, nb, ns)
+                    new_states[k] = new_states.get(k, 0.0) + prob * p_leg
+        states = new_states
+
+    if not score_dist:
+        raise HTTPException(status_code=500, detail="Score distribution computation failed.")
+
+    # Generate half-point lines
+    lines = [t + 0.5 for t in range(min_total - 1, max_total)]
+    result_lines = []
+    for line in lines:
+        p_over = sum(v for t, v in score_dist.items() if t > line)
+        p_under = sum(v for t, v in score_dist.items() if t < line)
+        total_p = p_over + p_under
+        if total_p < 1e-9:
+            continue
+        p_over /= total_p
+        p_under /= total_p
+        adj = _margin_engine.apply(
+            true_probs={"over": p_over, "under": p_under},
+            regime=0,
+            base_margin=request.base_margin,
+        )
+        result_lines.append({
+            "line": line,
+            "true_over": round(p_over, 6),
+            "true_under": round(p_under, 6),
+            "odds_over": round(1.0 / adj["over"], 4) if adj.get("over", 0) > 1e-9 else None,
+            "odds_under": round(1.0 / adj["under"], 4) if adj.get("under", 0) > 1e-9 else None,
+        })
+
+    return {
+        "market": "multi_totals",
+        "competition_code": request.competition_code,
+        "round_name": request.round_name,
+        "p1_id": request.p1_id,
+        "p2_id": request.p2_id,
+        "legs_to_win": legs_to_win,
+        "score_distribution": {str(k): round(v, 6) for k, v in sorted(score_dist.items())},
+        "total_lines": result_lines,
         "applied_margin": round(request.base_margin, 5),
     }
