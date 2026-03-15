@@ -65,9 +65,11 @@ def _normalise(name: str) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--db-url", default=None,
+                        help="Override DATABASE_URL for local runs against public proxy")
     args = parser.parse_args()
 
-    db_url = _db_url_sync(settings.DATABASE_URL)
+    db_url = _db_url_sync(args.db_url or settings.DATABASE_URL)
     conn = psycopg2.connect(db_url, connect_timeout=30)
 
     # Load all players from DB
