@@ -109,6 +109,9 @@ def load_all_data(conn) -> tuple[pd.DataFrame, dict]:
     log.info("loading_matches")
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute("""
+            -- Deduplicate: DISTINCT ON (canonical_pair, date, source) eliminates
+            -- both exact duplicates and reverse duplicates (A vs B + B vs A same day).
+            -- Keeps the row with the smallest id (earliest inserted) per canonical pair.
             SELECT
                 m.id AS match_id,
                 m.player1_id, m.player2_id, m.winner_player_id,
@@ -117,13 +120,25 @@ def load_all_data(conn) -> tuple[pd.DataFrame, dict]:
                 (m.raw_source_data->>'player1_avg')::float AS match_avg_p1,
                 (m.raw_source_data->>'player2_avg')::float AS match_avg_p2,
                 c.format_code, c.ecosystem, c.is_televised
-            FROM darts_matches m
+            FROM (
+                SELECT DISTINCT ON (
+                    LEAST(player1_id, player2_id),
+                    GREATEST(player1_id, player2_id),
+                    match_date,
+                    source_name
+                ) *
+                FROM darts_matches
+                WHERE status IN ('Completed', 'result')
+                  AND winner_player_id IS NOT NULL
+                  AND player1_id IS NOT NULL
+                  AND player2_id IS NOT NULL
+                  AND match_date IS NOT NULL
+                ORDER BY
+                    LEAST(player1_id, player2_id),
+                    GREATEST(player1_id, player2_id),
+                    match_date, source_name, id
+            ) m
             JOIN darts_competitions c ON c.id = m.competition_id
-            WHERE m.status IN ('Completed', 'result')
-              AND m.winner_player_id IS NOT NULL
-              AND m.player1_id IS NOT NULL
-              AND m.player2_id IS NOT NULL
-              AND m.match_date IS NOT NULL
             ORDER BY m.match_date ASC
         """)
         matches = pd.DataFrame(cur.fetchall())
