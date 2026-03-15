@@ -26,6 +26,7 @@ FROM python:3.11-slim AS runtime
 # Install runtime system deps only
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
+    libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
