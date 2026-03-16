@@ -3,6 +3,9 @@ Live in-play pricing API routes.
 
 Endpoints
 ---------
+POST /api/v1/darts/live/seed
+    Initialise a new live match state (required before any live pricing).
+
 POST /api/v1/darts/live/update
     Accept a visit-scored event and reprice all live markets.
 
@@ -183,6 +186,141 @@ def _state_to_response(state: Any, engine: Any = None) -> LiveStateResponse:
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
+class MatchSeedRequest(BaseModel):
+    """
+    Payload to initialise a new live match state.
+
+    Send this once when a match goes live (before the first visit is scored).
+    All subsequent ``/live/update`` calls will apply visit-scored events to
+    this state.
+    """
+
+    match_id: str = Field(..., description="Unique match identifier")
+    format_code: str = Field(
+        default="PDC_PL",
+        description="Competition format code from the registry (e.g. PDC_PL, PDC_WC)",
+    )
+    p1_player_id: str = Field(default="", description="Player 1 identifier")
+    p2_player_id: str = Field(default="", description="Player 2 identifier")
+    p1_three_da: float = Field(
+        default=70.0, ge=20.0, le=120.0, description="Player 1 three-dart average"
+    )
+    p2_three_da: float = Field(
+        default=70.0, ge=20.0, le=120.0, description="Player 2 three-dart average"
+    )
+    regime: int = Field(
+        default=1, ge=0, le=2, description="Data regime: 0=R0 (logit), 1=R1 (LightGBM), 2=R2 (stacking)"
+    )
+    current_thrower: int = Field(
+        default=0, ge=0, le=1, description="Who throws first: 0=P1, 1=P2"
+    )
+    leg_starter_confidence: float = Field(
+        default=1.0, ge=0.0, le=1.0, description="Confidence in starter attribution"
+    )
+
+
+class MatchSeedResponse(BaseModel):
+    """Response after successfully seeding a live match state."""
+
+    match_id: str
+    format_code: str
+    state: LiveStateResponse
+    message: str
+
+
+@router.post(
+    "/live/seed",
+    response_model=MatchSeedResponse,
+    summary="Initialise a live match state",
+    status_code=201,
+)
+async def seed_live_match(
+    payload: MatchSeedRequest = Body(...),
+) -> MatchSeedResponse:
+    """
+    Initialise a new live match state in Redis.
+
+    Must be called once before any ``/live/update`` or ``/live/price`` calls.
+    Typically invoked by the live ingestion worker when a match transitions to
+    in-play status.
+
+    Calling seed on an already-active match_id overwrites the existing state
+    (useful for match restarts or corrections).
+
+    Raises
+    ------
+    422 Unprocessable Entity
+        When the format_code is invalid or the payload fails validation.
+    500 Internal Server Error
+        When Redis is unavailable and the state cannot be persisted.
+    """
+    from datetime import datetime, timezone
+
+    from engines.live.live_state_machine import DartsLiveState
+    from competition.format_registry import get_format
+
+    # Resolve format to get draw_enabled / two_clear_legs flags
+    try:
+        fmt = get_format(payload.format_code)
+        draw_enabled = getattr(fmt, "draw_enabled", False)
+        two_clear_legs = getattr(fmt, "two_clear_legs", False)
+        double_start = getattr(fmt, "double_start_required", False)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "invalid_format_code",
+                "format_code": payload.format_code,
+                "message": str(exc),
+            },
+        )
+
+    state = DartsLiveState(
+        match_id=payload.match_id,
+        score_p1=501,
+        score_p2=501,
+        current_thrower=payload.current_thrower,
+        legs_p1=0,
+        legs_p2=0,
+        sets_p1=0,
+        sets_p2=0,
+        lwp_current=0.5,
+        regime=payload.regime,
+        double_start=double_start,
+        draw_enabled=draw_enabled,
+        two_clear_legs=two_clear_legs,
+        format_code=payload.format_code,
+        leg_starter=payload.p1_player_id if payload.current_thrower == 0 else payload.p2_player_id,
+        leg_starter_confidence=payload.leg_starter_confidence,
+        is_pressure_state=False,
+        current_dart_number=1,
+        dartconnect_feed_lag_ms=0,
+        last_updated=datetime.now(timezone.utc),
+        p1_player_id=payload.p1_player_id,
+        p2_player_id=payload.p2_player_id,
+        p1_three_da=payload.p1_three_da,
+        p2_three_da=payload.p2_three_da,
+        current_leg_number=1,
+    )
+
+    engine = _get_live_engine()
+    await engine.save_state(payload.match_id, state)
+
+    logger.info(
+        "live_match_seeded",
+        match_id=payload.match_id,
+        format_code=payload.format_code,
+        regime=payload.regime,
+    )
+
+    return MatchSeedResponse(
+        match_id=payload.match_id,
+        format_code=payload.format_code,
+        state=_state_to_response(state),
+        message=f"Match {payload.match_id!r} seeded successfully.",
+    )
+
 
 @router.post(
     "/live/update",

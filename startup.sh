@@ -6,6 +6,9 @@ set -e
 MAX_ATTEMPTS=3
 attempt=1
 
+echo "[startup] Running alembic version stamp fix..."
+python scripts/alembic_stamp_fix.py
+
 echo "[startup] Attempting DB migration (max ${MAX_ATTEMPTS} tries)..."
 while [ $attempt -le $MAX_ATTEMPTS ]; do
     if timeout 15 python -m alembic upgrade head 2>&1; then
