@@ -237,7 +237,6 @@ async def _bg_darts24_scrape(competition_slug: str, request_id: str) -> None:
 
 @router.get(
     "/status",
-    response_model=FeedsStatusResponse,
     summary="Data source status",
     description=(
         "Returns the current status of all registered data sources "
