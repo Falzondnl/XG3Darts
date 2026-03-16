@@ -88,6 +88,9 @@ def _classify_url(url: str) -> str:
     path = urlparse(url).path.lower()
     if re.search(r"/(match(es)?|result(s)?)/", path):
         return "match"
+    # matchcenter/YYYY/M/D pages contain match-day data (scores, averages)
+    if re.match(r"/matchcenter/\d{4}/\d{1,2}/\d{1,2}$", path):
+        return "event"
     if re.search(r"/(event(s)?|tournament(s)?)/", path):
         return "event"
     if re.search(r"/(player(s)?|profile)/", path):
@@ -457,8 +460,8 @@ class MastercallerPlaywrightScraper:
         self._log.info(
             "scraper_complete",
             total=total,
-            match=len(results.get("match", [])),
-            event=len(results.get("event", [])),
+            match_pages=len(results.get("match", [])),
+            event_pages=len(results.get("event", [])),
             failed=failed,
         )
         return results

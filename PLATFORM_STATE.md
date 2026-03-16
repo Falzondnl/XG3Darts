@@ -28,12 +28,14 @@ Target: 145+. Current: 675 (4.6x target).
 | Model | Version | AUC | Features | Status |
 |---|---|---|---|---|
 | R0 (logit) | v1 | 0.74 | 14 | ✅ Deployed |
-| R1 File Predictor | v5 | 0.8097 | 19 | ✅ Deployed (prematch API) |
-| R1 Full (train_r1.py) | v5 | 0.8182 | 38 | ✅ Trained, not yet wired to API |
+| R1 Full (38-feat) | v4 | 0.8182 | 38 | ✅ Wired to API (r1_file_predictor.py) |
+| R1 Raw (legacy) | v5 | 0.8097 | 19 | ✅ Fallback if r1_model.pkl absent |
 | R2 Stacking | — | — | 68 | ⏳ Requires DartConnect (R2 mode) |
 
 R1 training: 195,874 samples from 279,820 PDC + DartsDatabase matches (deduped).
-Brier score: 0.175 (R1 File). All temporal leakages removed.
+Brier score: 0.175. All temporal leakages removed.
+r1_file_predictor.py: loads r1_model.pkl (38 feat) first; falls back to r1_model_from_raw.pkl (19 feat).
+format_code + ecosystem + is_televised context accepted from pre-match API call.
 
 ---
 
@@ -44,7 +46,7 @@ Brier score: 0.175 (R1 File). All temporal leakages removed.
 | PDC API | 279k fixtures, 17.6k players, 3.1k tournaments | ✅ Scraped |
 | DartsOrakel | 3,358 players (career 3DA); 201 player profiles | ✅ Core scraped |
 | DartsDatabase | 5,506 matches (56 events) | ✅ Partially scraped |
-| Mastercaller | 836 links discovered; 9 JS event pages in progress | 🔄 Playwright running |
+| Mastercaller | 836 links + 9 new URLs; matchcenter/YYYY/M/D classifier fixed; 4 dates scraped | 🔄 Scraping tournament results |
 | WDF | Rankings scraped | ✅ Available |
 | DartConnect | Not yet | ⏳ R2 mode - needs credentials |
 | Flashscore | Discovered | ⏳ Not yet scraped |
