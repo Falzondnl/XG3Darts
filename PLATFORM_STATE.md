@@ -7,7 +7,7 @@
 
 ## Current Sprint: Client Rollout Hardening
 
-### Status: PRODUCTION READY (Railway deployed)
+### Status: PRODUCTION READY — CLIENT ROLLOUT READY ✅ (verified 2026-03-16)
 
 ---
 
@@ -76,7 +76,7 @@ format_code + ecosystem + is_televised context accepted from pre-match API call.
 
 | Component | Status | Notes |
 |---|---|---|
-| Railway (API) | ✅ Deployed | commit d1a372b (railway up 6a3f95b9) |
+| Railway (API) | ✅ Deployed | commit d46cdb3 (railway up 1a928824) |
 | Railway (Frontend) | ✅ Deployed | Next.js 15.2.4 |
 | PostgreSQL (Railway) | ✅ Up | Migration 004 applied |
 | Redis (Railway) | ✅ Up | Live state persistence |
@@ -142,6 +142,27 @@ B2B clients must send header: `X-Api-Key: <key>`
 | ed62fa3 | docs(platform): mark P1 liability/trader routes verified live |
 | d1a372b | fix(deploy): add r1_model.pkl gitignore negation + mastercaller full_text capture |
 | 0a81b81 | feat(prematch): pass competition context to R1 38-feature model |
+
+---
+
+## Verified Live — 2026-03-16 (commit d46cdb3)
+
+| Check | Result |
+|---|---|
+| /health | ✅ 200 |
+| /ready | ✅ 200 |
+| monitoring/markets | ✅ n_available=15/15, all_available=True, corr_matrix_ok=True |
+| monitoring/markov-validation | ✅ 200 |
+| monitoring/market-calibration | ✅ 200 |
+| monitoring/clv | ✅ 200 |
+| monitoring/coverage-regimes | ✅ 200 |
+| players/rankings/pdc | ✅ 200 |
+| players/rankings/wdf | ✅ 200 |
+| sgp/markets | ✅ 200 |
+| trader/overrides | ✅ 200 |
+| liability/exposure | ✅ 200 |
+| alembic stamp fix | ✅ No stale revisions — alembic_version={004} |
+| alembic upgrade head | ✅ Migration succeeded |
 
 ---
 
