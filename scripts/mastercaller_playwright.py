@@ -239,7 +239,12 @@ async def _extract_match_data(page: Any, url: str) -> dict[str, Any]:
 
 
 async def _extract_event_data(page: Any, url: str) -> dict[str, Any]:
-    """Extract tournament bracket / draw data from an event page."""
+    """Extract tournament bracket / draw data from an event page.
+
+    For /matchcenter/YYYY/M/D pages the full body text is also captured,
+    since match results (averages, scores) are rendered in text form with
+    no parseable tables or individual match links.
+    """
     data: dict[str, Any] = {
         "url": url,
         "page_type": "event",
@@ -255,6 +260,13 @@ async def _extract_event_data(page: Any, url: str) -> dict[str, Any]:
     h1_el = await page.query_selector("h1")
     if h1_el:
         data["event_name"] = (await h1_el.text_content() or "").strip()
+
+    # Capture full body text for matchcenter date pages (contains match data)
+    is_matchcenter_date = bool(re.match(r".*/matchcenter/\d{4}/\d{1,2}/\d{1,2}$",
+                                         urlparse(url).path.lower()))
+    if is_matchcenter_date:
+        body_text = await page.evaluate("() => document.body.innerText")
+        data["full_text"] = body_text  # no truncation — full match day data
 
     # Collect all match links
     links = await page.query_selector_all("a[href]")
