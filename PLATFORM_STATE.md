@@ -1,6 +1,6 @@
 # XG3 Darts — Platform State
 
-**Last updated: 2026-03-15**
+**Last updated: 2026-03-16**
 **Version: Darts Tier-1 V2**
 
 ---
@@ -76,7 +76,7 @@ format_code + ecosystem + is_televised context accepted from pre-match API call.
 
 | Component | Status | Notes |
 |---|---|---|
-| Railway (API) | ✅ Deployed | commit 2588d16 |
+| Railway (API) | ✅ Deployed | commit d1a372b (railway up 6a3f95b9) |
 | Railway (Frontend) | ✅ Deployed | Next.js 15.2.4 |
 | PostgreSQL (Railway) | ✅ Up | Migration 004 applied |
 | Redis (Railway) | ✅ Up | Live state persistence |
@@ -100,7 +100,7 @@ Numpy vectorized transition matrix + module-level LRU cache.
 ## Pending Items
 
 ### P1 — Must close before new client onboarding
-- [ ] Verify Railway liability/trader/monitoring routes responding 200 (new deploy)
+- [x] Verify Railway liability/trader/monitoring routes responding 200 (new deploy) — DONE 2026-03-16
 - [ ] Distribute client API key: `XG3-lwVQLP_Xnh4yOuqy-WsCc8eOERVt_jBa0EbM41GxP0M`
 
 ### P2 — Data enrichment (improves prop market quality)
