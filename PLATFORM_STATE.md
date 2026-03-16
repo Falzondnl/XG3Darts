@@ -1,6 +1,6 @@
 # XG3 Darts — Platform State
 
-**Last updated: 2026-03-16**
+**Last updated: 2026-03-16 (v2.1)**
 **Version: Darts Tier-1 V2**
 
 ---
@@ -101,6 +101,9 @@ Numpy vectorized transition matrix + module-level LRU cache.
 
 ### P1 — Must close before new client onboarding
 - [x] Verify Railway liability/trader/monitoring routes responding 200 (new deploy) — DONE 2026-03-16
+- [x] Fix monitoring/markets: 7 wrong engine class names → 15/15 markets now resolvable — DONE 2026-03-16 (commit d46cdb3)
+- [x] Fix Alembic stale revision: `scripts/alembic_stamp_fix.py` pre-flight at startup — DONE 2026-03-16 (commit d46cdb3)
+- [x] Live match seeding: `POST /api/v1/darts/live/seed` endpoint added — DONE 2026-03-16 (commit d46cdb3)
 - [ ] Distribute client API key: `XG3-lwVQLP_Xnh4yOuqy-WsCc8eOERVt_jBa0EbM41GxP0M`
 
 ### P2 — Data enrichment (improves prop market quality)
@@ -134,11 +137,11 @@ B2B clients must send header: `X-Api-Key: <key>`
 
 | SHA | Message |
 |---|---|
+| d46cdb3 | fix(ops): close client-readiness gaps — monitoring engines, alembic stamp, live seed |
 | e3f54cf | feat(data): add Mastercaller full_text parser — 202 matches extracted |
 | ed62fa3 | docs(platform): mark P1 liability/trader routes verified live |
 | d1a372b | fix(deploy): add r1_model.pkl gitignore negation + mastercaller full_text capture |
 | 0a81b81 | feat(prematch): pass competition context to R1 38-feature model |
-| b900abf | feat(models): wire R1 38-feature model to production API |
 
 ---
 
