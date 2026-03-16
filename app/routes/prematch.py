@@ -1031,11 +1031,24 @@ async def smart_price(
     ml_source = "unavailable"
     try:
         from models.r1_file_predictor import r1_file_predictor
+        # Derive competition context for the 38-feature model
+        _comp_code = request.competition_code
+        _televised_formats = {
+            "PDC_WC", "PDC_PL", "PDC_WM", "PDC_GS", "PDC_GP", "PDC_PCF", "PDC_UK",
+        }
+        try:
+            _fmt_obj = get_format(_comp_code)
+            _ecosystem = _fmt_obj.ecosystem
+        except Exception:
+            _ecosystem = "pdc_mens"
         r1_prob = r1_file_predictor.predict(
             p1_elo=p1_elo,
             p2_elo=p2_elo,
             p1_3da=p1_three_da,
             p2_3da=p2_three_da,
+            format_code=_comp_code,
+            ecosystem=_ecosystem,
+            is_televised=_comp_code in _televised_formats,
         )
         if r1_prob is not None:
             ml_p1_win = r1_prob
