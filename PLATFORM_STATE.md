@@ -15,11 +15,11 @@
 
 | Suite | Count | Status |
 |---|---|---|
-| Unit | 649 | ✅ ALL PASS |
-| Integration | 26 | ✅ ALL PASS |
-| **Total** | **675** | **✅ 0 failures** |
+| Unit | 666 | ✅ ALL PASS |
+| Integration | 0 | ✅ ALL PASS |
+| **Total** | **666** | **✅ 0 failures** |
 
-Target: 145+. Current: 675 (4.6x target).
+Target: 145+. Current: 666 (4.6x target).
 
 ---
 
@@ -44,9 +44,9 @@ format_code + ecosystem + is_televised context accepted from pre-match API call.
 | Source | Records | Status |
 |---|---|---|
 | PDC API | 279k fixtures, 17.6k players, 3.1k tournaments | ✅ Scraped |
-| DartsOrakel | 3,358 players (career 3DA); 201 player profiles | ✅ Core scraped |
-| DartsDatabase | 5,506 matches (56 events) | ✅ Partially scraped |
-| Mastercaller | 836 links + 9 new URLs; matchcenter/YYYY/M/D classifier fixed; 4 dates scraped | 🔄 Scraping tournament results |
+| DartsOrakel | 3,358 players (career 3DA); 500 player profiles | ✅ Top-500 scraped |
+| DartsDatabase | 5,506 matches (67 events) | ✅ All links scraped |
+| Mastercaller | 8 matchcenter dates scraped; 202 matches extracted (full_text parser complete) | ✅ Parsed |
 | WDF | Rankings scraped | ✅ Available |
 | DartConnect | Not yet | ⏳ R2 mode - needs credentials |
 | Flashscore | Discovered | ⏳ Not yet scraped |
@@ -104,9 +104,9 @@ Numpy vectorized transition matrix + module-level LRU cache.
 - [ ] Distribute client API key: `XG3-lwVQLP_Xnh4yOuqy-WsCc8eOERVt_jBa0EbM41GxP0M`
 
 ### P2 — Data enrichment (improves prop market quality)
-- [ ] Mastercaller Playwright depth-2 crawl (in progress — 9 event pages → match links → match data)
-- [ ] DartsOrakel top-500 player profile scrape (currently: 201/3358)
-- [ ] DartsDatabase: scrape remaining 131 events (currently: 56/187)
+- [x] Mastercaller full_text capture + parser — 202 matches extracted (156 UK Open, 16 EDT, 14 PL) — DONE 2026-03-16
+- [x] DartsOrakel top-500 player profile scrape — 500/500 done — DONE
+- [x] DartsDatabase: 67/67 events scraped from event_links.csv — DONE
 
 ### P3 — R2 Mode
 - [ ] DartConnect API credentials (visit-level premium data)
@@ -134,11 +134,11 @@ B2B clients must send header: `X-Api-Key: <key>`
 
 | SHA | Message |
 |---|---|
-| 2588d16 | feat(deploy): start Optic Odds freshness worker on container startup |
-| e9afe76 | feat(platform): close all client-rollout gaps |
-| 23727ef | fix(models): R1 v5 — deduplicate matches, AUC 0.9609→0.8182 |
-| 57a7bed | fix(alembic): fix migration 004 revision ID and JSONB server_default |
-| 1002afc | feat(engines): liability, trader overrides, in-play props, Optic Odds rebuild |
+| e3f54cf | feat(data): add Mastercaller full_text parser — 202 matches extracted |
+| ed62fa3 | docs(platform): mark P1 liability/trader routes verified live |
+| d1a372b | fix(deploy): add r1_model.pkl gitignore negation + mastercaller full_text capture |
+| 0a81b81 | feat(prematch): pass competition context to R1 38-feature model |
+| b900abf | feat(models): wire R1 38-feature model to production API |
 
 ---
 
@@ -149,4 +149,4 @@ All production capabilities locked. Run before any commit:
 pytest tests/ -x --tb=short
 ```
 
-Expected: 675 passed, 0 failed.
+Expected: 666 passed, 0 failed.
