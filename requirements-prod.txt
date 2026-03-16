@@ -32,6 +32,10 @@ python-json-logger>=2.0.0
 aiohttp>=3.9.0
 httpx>=0.26.0
 
+# ---- Web Scraping (feeds: Flashscore + Darts24 live data) ----
+beautifulsoup4>=4.12.0
+lxml>=5.0.0
+
 # ---- Data Science ----
 pandas>=2.1.0
 numpy>=1.26.0

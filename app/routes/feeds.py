@@ -33,8 +33,14 @@ import structlog
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from data.sources.darts24_client import Darts24Client
-from data.sources.flashscore_client import FlashscoreClient
+try:
+    from data.sources.darts24_client import Darts24Client
+    from data.sources.flashscore_client import FlashscoreClient
+    _SCRAPERS_AVAILABLE = True
+except ImportError:
+    Darts24Client = None  # type: ignore[assignment,misc]
+    FlashscoreClient = None  # type: ignore[assignment,misc]
+    _SCRAPERS_AVAILABLE = False
 
 logger = structlog.get_logger(__name__)
 router = APIRouter(prefix="/feeds", tags=["Feeds"])
