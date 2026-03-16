@@ -567,14 +567,14 @@ async def _main() -> None:
             print(f"ERROR: {exc}", file=sys.stderr)
             sys.exit(1)
 
-    print(f"Scraping {len(urls)} URLs → {args.output_dir}")
+    print(f"Scraping {len(urls)} URLs -> {args.output_dir}")
     results = await scraper.run(urls)
 
     match_count = len(results.get("match", []))
     event_count = len(results.get("event", []))
     other_count = len(results.get("other", []))
     print(
-        f"Done — match={match_count} event={event_count} other={other_count}"
+        f"Done - match={match_count} event={event_count} other={other_count}"
     )
 
     # Summary of what was extracted
