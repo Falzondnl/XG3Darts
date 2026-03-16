@@ -22,6 +22,7 @@ from app.auth import api_key_middleware
 from app.config import settings
 from app.routes import (
     events,
+    feeds,
     liability,
     live,
     monitoring,
@@ -189,6 +190,7 @@ def create_app() -> FastAPI:
     app.include_router(monitoring_router, prefix=api_prefix, tags=["Monitoring"])
     app.include_router(liability.router, prefix=api_prefix, tags=["Liability"])
     app.include_router(trader.router, prefix=api_prefix, tags=["Trader"])
+    app.include_router(feeds.router, prefix=api_prefix, tags=["Feeds"])
 
     # Health / readiness (no versioned prefix — checked by load balancers)
     @app.get("/health", include_in_schema=False)
