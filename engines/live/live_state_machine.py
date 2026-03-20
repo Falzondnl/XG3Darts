@@ -117,6 +117,11 @@ class DartsLiveState:
     current_leg_number: int = 1
     round_fmt: Optional[DartsRoundFormat] = field(default=None, compare=False)
 
+    # Match-completion flag — set to True by _handle_leg_completion when a
+    # player has won the required legs/sets.  The live ops worker reads this
+    # flag to trigger settlement without polling lwp_current (W4).
+    match_complete: bool = False
+
     def is_stale(self, max_age_ms: int = 30_000) -> bool:
         """
         Return True if the state has not been updated within max_age_ms milliseconds.
@@ -185,6 +190,7 @@ class DartsLiveState:
             "p1_three_da": self.p1_three_da,
             "p2_three_da": self.p2_three_da,
             "current_leg_number": self.current_leg_number,
+            "match_complete": self.match_complete,
             # round_fmt is not serialised; must be rehydrated from format_code
         }
         return d
@@ -229,6 +235,7 @@ class DartsLiveState:
             p1_three_da=float(d.get("p1_three_da", 70.0)),
             p2_three_da=float(d.get("p2_three_da", 70.0)),
             current_leg_number=int(d.get("current_leg_number", 1)),
+            match_complete=bool(d.get("match_complete", False)),
             round_fmt=None,  # rehydrated separately
         )
 
@@ -722,6 +729,34 @@ class DartsLiveEngine:
             # Unknown: alternate from current leg
             next_starter_idx = 1 - state.current_thrower
 
+        # Detect match completion (W4: match-completion detection).
+        # Check whether either player has now reached the win target for the
+        # current format.  The flag is carried on the returned state so that
+        # both the live ops worker and any downstream subscriber can react.
+        match_complete = False
+        if state.round_fmt is not None:
+            fmt = state.round_fmt
+            if fmt.is_sets_format and fmt.sets_to_win is not None:
+                match_complete = (
+                    new_sets_p1 >= fmt.sets_to_win
+                    or new_sets_p2 >= fmt.sets_to_win
+                )
+            elif fmt.legs_to_win is not None:
+                match_complete = (
+                    new_legs_p1 >= fmt.legs_to_win
+                    or new_legs_p2 >= fmt.legs_to_win
+                )
+
+        if match_complete:
+            logger.info(
+                "match_completed",
+                match_id=state.match_id,
+                legs_p1=new_legs_p1,
+                legs_p2=new_legs_p2,
+                sets_p1=new_sets_p1,
+                sets_p2=new_sets_p2,
+            )
+
         logger.info(
             "leg_completed",
             match_id=state.match_id,
@@ -730,6 +765,7 @@ class DartsLiveEngine:
             new_sets=(new_sets_p1, new_sets_p2),
             next_starter=next_starter_idx,
             next_leg=next_leg_number,
+            match_complete=match_complete,
         )
 
         return dataclasses.replace(
@@ -746,6 +782,7 @@ class DartsLiveEngine:
             leg_starter_confidence=next_starter_info.confidence,
             visit_count_p1=0,
             visit_count_p2=0,
+            match_complete=match_complete,
         )
 
     def _update_pressure_flag(self, state: DartsLiveState) -> DartsLiveState:

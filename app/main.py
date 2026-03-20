@@ -99,8 +99,34 @@ async def lifespan(app: FastAPI):
         version=settings.SERVICE_VERSION,
         environment=settings.ENVIRONMENT,
     )
-    # Future: initialise DB connection pool, Redis, warm caches
+
+    # ---------------------------------------------------------------------------
+    # Live Operations Worker
+    # Wires W1-W9: feed connection, auto-seed, auto-settle, completion detection,
+    # live state enumeration, restart recovery, in-process freshness worker,
+    # and singleton live engine.
+    # ---------------------------------------------------------------------------
+    from app.workers.live_ops_worker import get_live_ops_worker
+
+    worker = get_live_ops_worker()
+    try:
+        await worker.start()
+    except Exception as exc:
+        # Worker failure is non-fatal: app continues serving pre-match traffic
+        logger.warning(
+            "live_ops_worker_start_failed",
+            error=str(exc),
+            hint="Pre-match endpoints remain available; live pricing degraded",
+        )
+
     yield
+
+    # Shutdown: stop the worker gracefully
+    try:
+        await worker.stop()
+    except Exception as exc:
+        logger.warning("live_ops_worker_stop_error", error=str(exc))
+
     logger.info("shutdown", service=settings.SERVICE_NAME)
 
 
