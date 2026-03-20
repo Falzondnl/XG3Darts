@@ -46,6 +46,7 @@ from engines.match_layer.match_combinatorics import MatchCombinatorialEngine
 from margin.blending_engine import DartsMarginEngine
 from margin.shin_margin import ShinMarginModel
 from props.prop_180 import Prop180Model
+from shared.pricing_layer import get_pricing_layer
 
 logger = structlog.get_logger(__name__)
 router = APIRouter()
@@ -55,6 +56,7 @@ _match_engine = MatchCombinatorialEngine()
 _margin_engine = DartsMarginEngine()
 _shin_model = ShinMarginModel()
 _prop_180_model = Prop180Model()
+_blend_layer = get_pricing_layer("darts")
 
 
 # ---------------------------------------------------------------------------
@@ -257,9 +259,25 @@ async def price_match_winner(request: MatchPriceRequest) -> dict[str, Any]:
     except (DartsEngineError, DartsDataError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
+    # Pinnacle logit blend — applied before margin so that all downstream
+    # odds derive from the blended probability. p1 is treated as "home"
+    # for the 2-way blend. Darts has no draw in standard PDC formats.
+    # Callers may pass Pinnacle odds in request as pinnacle_home_odds /
+    # pinnacle_away_odds optional fields; absent → model-only fallback.
+    _pin_home_darts = getattr(request, "pinnacle_home_odds", None)
+    _pin_away_darts = getattr(request, "pinnacle_away_odds", None)
+    _darts_blend = _blend_layer.blend_sync(
+        model_prob=match_result.p1_win,
+        pinnacle_home_odds=float(_pin_home_darts) if _pin_home_darts is not None else None,
+        pinnacle_away_odds=float(_pin_away_darts) if _pin_away_darts is not None else None,
+        pinnacle_draw_odds=None,
+    )
+    _blended_p1 = _darts_blend.blended_prob
+    _blended_p2 = 1.0 - _blended_p1
+
     true_probs: dict[str, float] = {
-        "p1_win": match_result.p1_win,
-        "p2_win": match_result.p2_win,
+        "p1_win": _blended_p1,
+        "p2_win": _blended_p2,
     }
     if match_result.draw > 0:
         true_probs["draw"] = match_result.draw
@@ -277,6 +295,8 @@ async def price_match_winner(request: MatchPriceRequest) -> dict[str, Any]:
         p1_id=request.p1_id,
         p2_id=request.p2_id,
         p1_win_true=round(match_result.p1_win, 4),
+        p1_win_blended=round(_blended_p1, 4),
+        blend_source=_darts_blend.source,
         margin=round(margin, 4),
     )
 
