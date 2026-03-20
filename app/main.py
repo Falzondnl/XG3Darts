@@ -194,6 +194,16 @@ def create_app() -> FastAPI:
     app.include_router(feeds.router, prefix=api_prefix, tags=["Feeds"])
     app.include_router(settlement.router, prefix=api_prefix, tags=["Settlement"])
 
+    # Prometheus metrics endpoint (scraped by external Prometheus server)
+    try:
+        from prometheus_client import make_asgi_app as _prom_asgi
+
+        _metrics_app = _prom_asgi()
+        app.mount("/metrics", _metrics_app)
+        logger.info("prometheus_metrics_endpoint_mounted", path="/metrics")
+    except ImportError:
+        logger.warning("prometheus_client not installed — /metrics not available")
+
     # Health / readiness (no versioned prefix — checked by load balancers)
     @app.get("/health", include_in_schema=False)
     async def health() -> dict[str, Any]:

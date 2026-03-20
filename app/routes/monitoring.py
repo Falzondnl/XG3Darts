@@ -24,8 +24,11 @@ from __future__ import annotations
 from typing import Any, Optional
 
 import structlog
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from db.session import get_session_dependency
 
 logger = structlog.get_logger(__name__)
 router = APIRouter()
@@ -88,6 +91,7 @@ async def get_markov_validation(
         le=365,
         description="Lookback window in days",
     ),
+    session: AsyncSession = Depends(get_session_dependency),
 ) -> MarkovValidationResponse:
     """
     Run (or retrieve cached) weekly Markov validation across all 7 market families.
@@ -101,7 +105,7 @@ async def get_markov_validation(
     """
     from monitoring.markov_validator import MarkovValidationMonitor
 
-    monitor = MarkovValidationMonitor(db_session=None)  # no DB in route; mock mode
+    monitor = MarkovValidationMonitor(db_session=session)
     results = await monitor.validate_all_families(since_days=since_days)
 
     families_out: dict[str, Any] = {}
@@ -137,6 +141,7 @@ async def get_market_calibration(
         le=365,
         description="Lookback window in days",
     ),
+    session: AsyncSession = Depends(get_session_dependency),
 ) -> MarketCalibrationResponse:
     """
     Run calibration checks for all seven market families.
@@ -150,7 +155,7 @@ async def get_market_calibration(
     """
     from monitoring.market_calibration_monitor import MarketCalibrationMonitor
 
-    monitor = MarketCalibrationMonitor(db_session=None)
+    monitor = MarketCalibrationMonitor(db_session=session)
     reports = await monitor.run_all_families(since_days=since_days)
 
     families_out: dict[str, Any] = {}
@@ -188,6 +193,7 @@ async def get_clv(
         le=365,
         description="Lookback window in days for CLV computation",
     ),
+    session: AsyncSession = Depends(get_session_dependency),
 ) -> CLVResponse:
     """
     Return CLV and margin summary for all market families.
@@ -200,7 +206,7 @@ async def get_clv(
     """
     from monitoring.clv_monitor import DartsCLVMonitor
 
-    monitor = DartsCLVMonitor(db_session=None, redis_client=None)
+    monitor = DartsCLVMonitor(db_session=session, redis_client=None)
     summary = await monitor.get_all_clv_summary(lookback_days=lookback_days)
 
     any_alerts = any(v["alert"] for v in summary.values())

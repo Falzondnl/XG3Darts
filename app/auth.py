@@ -89,7 +89,14 @@ def _is_valid_key(key: str) -> bool:
     If no keys are registered (development mode), all keys are accepted.
     """
     if not _VALID_KEY_HASHES:
-        return True  # no keys configured → open (dev mode)
+        # Fail-closed in production: refuse to accept if no keys configured.
+        import os
+
+        env = os.getenv("ENVIRONMENT", "development")
+        if env == "production":
+            logger.error("auth_fail_closed: API_KEYS empty in production — rejecting")
+            return False
+        return True  # no keys configured → open (dev mode only)
     candidate_hash = _hash_key(key)
     return any(
         hmac.compare_digest(candidate_hash, valid)
@@ -116,8 +123,23 @@ async def api_key_middleware(request: Request, call_next):
     if any(path.startswith(prefix) for prefix in _PUBLIC_PREFIXES):
         return await call_next(request)
 
-    # If no keys configured, skip enforcement (dev mode)
+    # If no keys configured: allow in dev, block in production
     if not _VALID_KEY_HASHES:
+        import os
+
+        if os.getenv("ENVIRONMENT", "development") == "production":
+            logger.critical(
+                "auth_fail_closed_middleware",
+                path=path,
+                message="API_KEYS empty in production — blocking all non-public requests",
+            )
+            return JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                content={
+                    "error": "auth_not_configured",
+                    "message": "Service API keys not configured. Contact operator.",
+                },
+            )
         return await call_next(request)
 
     api_key: Optional[str] = request.headers.get("X-Api-Key")

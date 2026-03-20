@@ -468,6 +468,8 @@ class DartsSettlementService:
             "break_of_throw":       self._grade_break_of_throw,
             "leg_winner_next":      self._grade_leg_winner_next,
             "total_180s_band":      self._grade_total_180s_band,
+            "both_to_score":        self._grade_both_to_score,
+            "winning_margin":       self._grade_winning_margin,
         }
 
         grader = dispatch.get(market_type)
@@ -1670,4 +1672,155 @@ class DartsSettlementService:
         return GradeResult(
             outcome=GradeOutcome.VOID,
             reason=f"Unrecognised total_180s_band selection: '{selection}'",
+        )
+
+    # ------------------------------------------------------------------
+    # both_to_score — both players must win >= N legs
+    # ------------------------------------------------------------------
+
+    def _grade_both_to_score(
+        self,
+        result: "MatchResult",
+        selection: str,
+        params: dict[str, Any] | None,
+    ) -> GradeResult:
+        """Grade 'both to score X+ legs' market.
+
+        Selection: 'yes' or 'no'.
+        Params must include 'threshold' (int, minimum legs each player must win).
+        """
+        if params is None or "threshold" not in params:
+            return GradeResult(
+                outcome=GradeOutcome.VOID,
+                reason="both_to_score requires 'threshold' parameter",
+            )
+        threshold = int(params["threshold"])
+        p1_legs = result.p1_legs_won
+        p2_legs = result.p2_legs_won
+        if p1_legs is None or p2_legs is None:
+            return GradeResult(
+                outcome=GradeOutcome.VOID,
+                reason="Leg counts unavailable — void",
+            )
+        both_scored = p1_legs >= threshold and p2_legs >= threshold
+        sel = selection.strip().lower()
+        if sel == "yes":
+            if both_scored:
+                return GradeResult(
+                    outcome=GradeOutcome.WIN,
+                    reason=f"Both scored {threshold}+ legs ({p1_legs}-{p2_legs}) — 'yes' wins",
+                )
+            return GradeResult(
+                outcome=GradeOutcome.LOSE,
+                reason=f"Not both scored {threshold}+ legs ({p1_legs}-{p2_legs}) — 'yes' loses",
+            )
+        if sel == "no":
+            if not both_scored:
+                return GradeResult(
+                    outcome=GradeOutcome.WIN,
+                    reason=f"Not both scored {threshold}+ legs ({p1_legs}-{p2_legs}) — 'no' wins",
+                )
+            return GradeResult(
+                outcome=GradeOutcome.LOSE,
+                reason=f"Both scored {threshold}+ legs ({p1_legs}-{p2_legs}) — 'no' loses",
+            )
+        return GradeResult(
+            outcome=GradeOutcome.VOID,
+            reason=f"Unrecognised both_to_score selection: '{selection}'",
+        )
+
+    # ------------------------------------------------------------------
+    # winning_margin — margin of victory in legs
+    # ------------------------------------------------------------------
+
+    def _grade_winning_margin(
+        self,
+        result: "MatchResult",
+        selection: str,
+        params: dict[str, Any] | None,
+    ) -> GradeResult:
+        """Grade 'winning margin' market.
+
+        Selection: 'exact_N' (margin == N), 'over_N' (margin > N), 'under_N' (margin < N),
+                   or 'N+' (margin >= N).
+        Params may include 'margin_line' (float) as alternative to selection-embedded value.
+        """
+        p1_legs = result.p1_legs_won
+        p2_legs = result.p2_legs_won
+        if p1_legs is None or p2_legs is None:
+            return GradeResult(
+                outcome=GradeOutcome.VOID,
+                reason="Leg counts unavailable — void",
+            )
+        actual_margin = abs(p1_legs - p2_legs)
+        sel = selection.strip().lower()
+
+        # Parse selection format: 'exact_3', 'over_2.5', 'under_4.5', '3+'
+        import re
+
+        m_exact = re.match(r"exact[_\s]?(\d+)", sel)
+        if m_exact:
+            target = int(m_exact.group(1))
+            if actual_margin == target:
+                return GradeResult(
+                    outcome=GradeOutcome.WIN,
+                    reason=f"Margin {actual_margin} == {target} — 'exact_{target}' wins",
+                )
+            return GradeResult(
+                outcome=GradeOutcome.LOSE,
+                reason=f"Margin {actual_margin} != {target} — 'exact_{target}' loses",
+            )
+
+        m_over = re.match(r"over[_\s]?([\d.]+)", sel)
+        if m_over:
+            line = float(m_over.group(1))
+            if actual_margin > line:
+                return GradeResult(
+                    outcome=GradeOutcome.WIN,
+                    reason=f"Margin {actual_margin} > {line} — 'over' wins",
+                )
+            if actual_margin == line and line == int(line):
+                return GradeResult(
+                    outcome=GradeOutcome.PUSH,
+                    reason=f"Margin {actual_margin} == {line} — push",
+                )
+            return GradeResult(
+                outcome=GradeOutcome.LOSE,
+                reason=f"Margin {actual_margin} <= {line} — 'over' loses",
+            )
+
+        m_under = re.match(r"under[_\s]?([\d.]+)", sel)
+        if m_under:
+            line = float(m_under.group(1))
+            if actual_margin < line:
+                return GradeResult(
+                    outcome=GradeOutcome.WIN,
+                    reason=f"Margin {actual_margin} < {line} — 'under' wins",
+                )
+            if actual_margin == line and line == int(line):
+                return GradeResult(
+                    outcome=GradeOutcome.PUSH,
+                    reason=f"Margin {actual_margin} == {line} — push",
+                )
+            return GradeResult(
+                outcome=GradeOutcome.LOSE,
+                reason=f"Margin {actual_margin} >= {line} — 'under' loses",
+            )
+
+        m_plus = re.match(r"(\d+)\+", sel)
+        if m_plus:
+            target = int(m_plus.group(1))
+            if actual_margin >= target:
+                return GradeResult(
+                    outcome=GradeOutcome.WIN,
+                    reason=f"Margin {actual_margin} >= {target} — '{target}+' wins",
+                )
+            return GradeResult(
+                outcome=GradeOutcome.LOSE,
+                reason=f"Margin {actual_margin} < {target} — '{target}+' loses",
+            )
+
+        return GradeResult(
+            outcome=GradeOutcome.VOID,
+            reason=f"Unrecognised winning_margin selection: '{selection}'",
         )
