@@ -25,13 +25,18 @@ from typing import Any, Optional
 
 import structlog
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
 from app.config import settings
 from engines.errors import DartsDataError, DartsEngineError
+from shared.stale_price_guard import StalePriceGuard
 
 logger = structlog.get_logger(__name__)
 router = APIRouter()
+
+# Stale-price guard — module-level singleton
+_stale_guard = StalePriceGuard(sport="darts")
 
 
 # ---------------------------------------------------------------------------
@@ -399,6 +404,9 @@ async def update_live_state(
     price_update = await engine.reprice_match(event.match_id, new_state)
     total_ms = (time.perf_counter() - t_start) * 1000.0
 
+    # Record that live data arrived for freshness tracking
+    _stale_guard.record_update(event.match_id)
+
     return VisitUpdateResponse(
         match_id=event.match_id,
         state=_state_to_response(new_state),
@@ -442,6 +450,19 @@ async def get_live_state(
             detail={
                 "error": "match_not_found",
                 "match_id": match_id,
+            },
+        )
+
+    # Gate: suspend if live data has gone stale
+    _freshness = _stale_guard.check(match_id)
+    if _freshness.should_suspend:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error": "live_suspended",
+                "reason": _freshness.reason,
+                "stale_seconds": round(_freshness.stale_seconds, 1),
+                "level": _freshness.level.value,
             },
         )
 
@@ -521,6 +542,19 @@ async def get_live_markets(
         raise HTTPException(
             status_code=404,
             detail={"error": "match_not_found", "match_id": match_id},
+        )
+
+    # Gate: suspend if live data has gone stale
+    _freshness = _stale_guard.check(match_id)
+    if _freshness.should_suspend:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error": "live_suspended",
+                "reason": _freshness.reason,
+                "stale_seconds": round(_freshness.stale_seconds, 1),
+                "level": _freshness.level.value,
+            },
         )
 
     try:

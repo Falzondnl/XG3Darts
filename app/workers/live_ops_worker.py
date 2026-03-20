@@ -40,6 +40,10 @@ from typing import Any, Optional
 import structlog
 
 from app.config import settings
+from shared.stale_price_guard import StalePriceGuard
+
+# Module-level guard — same sport singleton as the routes module
+_worker_stale_guard = StalePriceGuard(sport="darts")
 
 logger = structlog.get_logger(__name__)
 
@@ -580,6 +584,9 @@ class DartsLiveOpsWorker:
                 "seeded_at": now,
                 "fixture": None,
             }
+
+        # Record live data arrival for stale-price guard
+        _worker_stale_guard.record_update(match_id)
 
         self._log.debug(
             "live_update_received",
