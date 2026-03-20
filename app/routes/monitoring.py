@@ -348,12 +348,24 @@ async def get_coverage_regimes() -> CoverageRegimeResponse:
 
     When the database is not connected, returns placeholder zeros.
     """
-    # In production this queries darts_coverage_regimes
-    # For now return a structured placeholder
     try:
-        # Attempt DB query if session available via app state
-        # Graceful degradation when DB is unavailable
-        r0, r1, r2 = 0, 0, 0
+        # Query real coverage regime counts from the inference service
+        # or the data coverage module.  Falls back to NOT_AVAILABLE when
+        # the service is not wired yet — never returns fake zeros.
+        from data.coverage_regime import get_regime_counts  # type: ignore[import]
+
+        try:
+            r0, r1, r2 = get_regime_counts()
+        except Exception:
+            # Service not wired — return explicit "not available" signal
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "coverage_regime_not_available",
+                    "message": "Coverage regime data source not connected. "
+                    "This endpoint returns real data only — never fake zeros.",
+                },
+            )
         total = r0 + r1 + r2
 
         def pct(n: int) -> float:

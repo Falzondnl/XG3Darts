@@ -698,10 +698,17 @@ class DartsLiveEngine:
 
         # Infer next leg starter
         next_leg_number = state.current_leg_number + 1
+        # Use the competition format's alternating_starts flag.
+        # Premier League uses winner-throws-next (alternating_starts=False),
+        # while standard PDC events alternate throws each leg.
+        _alt_starts = True  # safe default for standard PDC
+        if state.round_fmt is not None:
+            _alt_starts = getattr(state.round_fmt, "alternating_starts", True)
+
         next_starter_info = self._starter_engine.infer_starter(
             leg_number=next_leg_number,
             players=(state.p1_player_id, state.p2_player_id),
-            alternating_starts=True,  # standard PDC rule
+            alternating_starts=_alt_starts,
             previous_starters=[],
             feed_starter_id=None,
         )

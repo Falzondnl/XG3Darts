@@ -30,6 +30,7 @@ from app.routes import (
     players,
     prematch,
     props,
+    settlement,
     sgp,
     trader,
     worldcup,
@@ -191,6 +192,7 @@ def create_app() -> FastAPI:
     app.include_router(liability.router, prefix=api_prefix, tags=["Liability"])
     app.include_router(trader.router, prefix=api_prefix, tags=["Trader"])
     app.include_router(feeds.router, prefix=api_prefix, tags=["Feeds"])
+    app.include_router(settlement.router, prefix=api_prefix, tags=["Settlement"])
 
     # Health / readiness (no versioned prefix — checked by load balancers)
     @app.get("/health", include_in_schema=False)
