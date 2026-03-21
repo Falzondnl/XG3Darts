@@ -31,12 +31,14 @@ from pydantic import BaseModel, Field, field_validator
 from app.config import settings
 from engines.errors import DartsDataError, DartsEngineError
 from shared.stale_price_guard import StalePriceGuard
+from shared.pricing_layer import get_pricing_layer
 
 logger = structlog.get_logger(__name__)
 router = APIRouter()
 
 # Stale-price guard — module-level singleton
 _stale_guard = StalePriceGuard(sport="darts")
+_live_blend = get_pricing_layer("darts")
 
 
 # ---------------------------------------------------------------------------
@@ -409,17 +411,24 @@ async def update_live_state(
     # Record that live data arrived for freshness tracking
     _stale_guard.record_update(event.match_id)
 
+    # Pinnacle logit-space blend (falls back to model-only when Pinnacle unavailable)
+    _blend = await _live_blend.blend_pre_match(event.match_id, price_update.p1_match_win)
+    _p1 = _blend.blended_prob
+    _p2 = max(0.0, 1.0 - _p1 - price_update.draw_prob)
+    _authority = "live_blended" if _blend.source == "pinnacle" else "live_model_only"
+
     return VisitUpdateResponse(
         match_id=event.match_id,
         state=_state_to_response(new_state),
         prices=LivePriceResponse(
             match_id=event.match_id,
-            p1_match_win=price_update.p1_match_win,
-            p2_match_win=price_update.p2_match_win,
+            p1_match_win=_p1,
+            p2_match_win=_p2,
             draw_prob=price_update.draw_prob,
             p1_leg_win=price_update.p1_leg_win,
             p2_leg_win=price_update.p2_leg_win,
             processing_latency_ms=price_update.processing_latency_ms,
+            pricing_authority=_authority,
         ),
         processing_latency_ms=total_ms,
     )
@@ -508,14 +517,20 @@ async def reprice_match(
             detail={"error": "pricing_error", "message": str(exc)},
         )
 
+    _blend = await _live_blend.blend_pre_match(match_id, price_update.p1_match_win)
+    _p1 = _blend.blended_prob
+    _p2 = max(0.0, 1.0 - _p1 - price_update.draw_prob)
+    _authority = "live_blended" if _blend.source == "pinnacle" else "live_model_only"
+
     return LivePriceResponse(
         match_id=match_id,
-        p1_match_win=price_update.p1_match_win,
-        p2_match_win=price_update.p2_match_win,
+        p1_match_win=_p1,
+        p2_match_win=_p2,
         draw_prob=price_update.draw_prob,
         p1_leg_win=price_update.p1_leg_win,
         p2_leg_win=price_update.p2_leg_win,
         processing_latency_ms=price_update.processing_latency_ms,
+        pricing_authority=_authority,
     )
 
 
@@ -568,9 +583,15 @@ async def get_live_markets(
             detail={"error": "pricing_error", "message": str(exc)},
         )
 
+    # Pinnacle logit-space blend for match winner market
+    _blend = await _live_blend.blend_pre_match(match_id, price_update.p1_match_win)
+    _p1_mw = _blend.blended_prob
+    _p2_mw = max(0.0, 1.0 - _p1_mw - price_update.draw_prob)
+    _authority = "live_blended" if _blend.source == "pinnacle" else "live_model_only"
+
     match_winner_market: dict[str, float] = {
-        "p1_win": round(price_update.p1_match_win, 6),
-        "p2_win": round(price_update.p2_match_win, 6),
+        "p1_win": round(_p1_mw, 6),
+        "p2_win": round(_p2_mw, 6),
     }
     if state.draw_enabled:
         match_winner_market["draw"] = round(price_update.draw_prob, 6)
@@ -600,6 +621,7 @@ async def get_live_markets(
         current_leg=current_leg_market,
         draw_available=state.draw_enabled,
         state_summary=state_summary,
+        pricing_authority=_authority,
     )
 
 

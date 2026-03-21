@@ -1,8 +1,9 @@
 {
-  "locked_at": "2026-03-21T11:40:07.014005+00:00",
+  "locked_at": "2026-03-21T19:31:49.833660+00:00",
   "project_root": ".",
   "fixed_bugs": [
-    "DARTS-LIVE-AUTH-001: pricing_authority='live_model_only' added to LivePriceResponse and LiveMarketsResponse in app/routes/live.py \u2014 sprint 44 live-blend assessment: darts live pricing uses visit-state Markov chain without Pinnacle logit-space blend."
+    "DARTS-LIVE-AUTH-001: pricing_authority='live_model_only' added to LivePriceResponse and LiveMarketsResponse in app/routes/live.py \u2014 sprint 44 live-blend assessment: darts live pricing uses visit-state Markov chain without Pinnacle logit-space blend.",
+    "DARTS-LIVE-BLEND-001: PricingLayer Pinnacle logit-space blend wired into POST /live/update, POST /live/price/{match_id}, GET /live/markets/{match_id} in app/routes/live.py \u2014 promoted darts from shadow to live_blended authoritative; pricing_authority=live_blended when Pinnacle available, live_model_only when not."
   ],
   "checksums": {
     "engines/state_layer/score_state.py": "fd3ea00362682a4de58cee9f0a0b7cefe17315119ca595bdfb5bfdffe5daf310",
@@ -23,6 +24,6 @@
     "props/prop_180.py": "21b1e6b066494023cef6fe6cf5775179aeea1b6f970a50d68a1cff4670c99ba9",
     "props/prop_nine_darter.py": "954afca98b7d830d996220721a0e6244207a13b96ed2af0cefc8bdcbf59b1e0d",
     "outrights/tournament_simulator.py": "0ee6bc8fac4f4bec1ba120f9c2e7596ec2edb7a92d916d248ada7cddadced377",
-    "app/routes/live.py": "0cd66bf2bf10e914c073a6a77833a1865cf0c84328090cefb4511c851f6164ef"
+    "app/routes/live.py": "a5105f7ed23047b42646434ed1dfa105a632011d6b17a99a1b5854a03b3a18bb"
   }
 }
