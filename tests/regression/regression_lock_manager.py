@@ -46,9 +46,15 @@ CRITICAL_MODULES: list[str] = [
     "props/prop_180.py",
     "props/prop_nine_darter.py",
     "outrights/tournament_simulator.py",
+    "app/routes/live.py",
 ]
 
-FIXED_BUGS: list[str] = []  # Add entries as bugs are fixed
+FIXED_BUGS: list[str] = [
+    "DARTS-LIVE-AUTH-001: pricing_authority='live_model_only' added to "
+    "LivePriceResponse and LiveMarketsResponse in app/routes/live.py — "
+    "sprint 44 live-blend assessment: darts live pricing uses visit-state "
+    "Markov chain without Pinnacle logit-space blend.",
+]
 
 
 # ---------------------------------------------------------------------------

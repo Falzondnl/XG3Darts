@@ -109,6 +109,7 @@ class LivePriceResponse(BaseModel):
     p1_leg_win: float
     p2_leg_win: float
     processing_latency_ms: float
+    pricing_authority: str = "live_model_only"
 
 
 class LiveMarketsResponse(BaseModel):
@@ -119,6 +120,7 @@ class LiveMarketsResponse(BaseModel):
     current_leg: dict[str, float]
     draw_available: bool
     state_summary: dict[str, Any]
+    pricing_authority: str = "live_model_only"
 
 
 class VisitUpdateResponse(BaseModel):
