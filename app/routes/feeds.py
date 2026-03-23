@@ -30,8 +30,12 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 import structlog
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.config import settings
+from db.session import get_session_dependency
 
 try:
     from data.sources.darts24_client import Darts24Client
@@ -544,6 +548,315 @@ async def get_flashscore_recent(
             "days_back": days_back,
             "match_count": len(matches),
             "matches": matches,
+        },
+        request_id=request_id,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Optic Odds fixture discovery + auto-pricing
+# ---------------------------------------------------------------------------
+
+# League-to-competition_code mapping for format resolution
+_LEAGUE_TO_COMP: dict[str, str] = {
+    "premier league": "PDC_PL",
+    "world championship": "PDC_WC",
+    "world matchplay": "PDC_WM",
+    "grand prix": "PDC_GP",
+    "uk open": "PDC_UK",
+    "grand slam": "PDC_GS",
+    "european tour": "PDC_ET",
+    "players championship": "PDC_PC",
+    "players championship finals": "PDC_PCF",
+    "masters": "PDC_MASTERS",
+    "world series": "PDC_WS",
+    "world cup": "PDC_WCUP",
+    "women's series": "PDC_WOM_SERIES",
+    "women's world matchplay": "PDC_WWM",
+    "development tour": "PDC_DEVTOUR",
+    "challenge tour": "PDC_CHALLENGE",
+    "world youth championship": "PDC_WYC",
+    "wdf world championship": "WDF_WC",
+    "wdf europe cup": "WDF_EC",
+    "wdf open": "WDF_OPEN",
+}
+
+
+def _map_league_to_comp(league_name: str) -> str:
+    """Map an Optic Odds league name to a competition_code.
+
+    Uses substring matching against known PDC/WDF competition names.
+    Falls back to PDC_PC (Players Championship format) which has a
+    sensible best-of-11 legs default.
+    """
+    league_lower = league_name.lower()
+    for key, comp in _LEAGUE_TO_COMP.items():
+        if key in league_lower:
+            return comp
+    return "PDC_PC"
+
+
+@router.get(
+    "/optic-odds/fixtures",
+    summary="Active darts fixtures from Optic Odds with optional auto-pricing",
+    tags=["Feeds"],
+)
+async def optic_odds_fixtures(
+    auto_price: bool = Query(
+        default=True,
+        description="Attempt to price each fixture via Markov engine",
+    ),
+    max_price: int = Query(
+        default=50, ge=1, le=200,
+        description="Max fixtures to auto-price per request",
+    ),
+    session: AsyncSession = Depends(get_session_dependency),
+) -> dict[str, Any]:
+    """Discover active/scheduled darts fixtures from Optic Odds REST API.
+
+    For each fixture, the endpoint:
+    1. Fetches active fixtures from Optic Odds ``/fixtures/active?sport=darts``
+    2. Looks up each player in the ``darts_players`` DB by name to get their 3DA
+    3. Maps the league to a ``competition_code`` for format resolution
+    4. Prices the fixture via the Markov hold-break engine
+
+    Fixtures that cannot be priced (unknown player, no 3DA, format error)
+    are returned with ``priced=false`` and an ``error`` field.
+    """
+    import os
+    import httpx
+    from sqlalchemy import text as sql_text
+
+    request_id = str(uuid.uuid4())
+    log = logger.bind(request_id=request_id)
+
+    api_key = os.getenv("OPTIC_ODDS_API_KEY", "") or settings.OPTIC_ODDS_API_KEY
+    if not api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="OPTIC_ODDS_API_KEY not configured — cannot fetch darts fixtures",
+        )
+
+    # --- Fetch fixtures from Optic Odds ---
+    try:
+        all_raw: list[dict] = []
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            for page in range(1, 6):
+                resp = await client.get(
+                    "https://api.opticodds.com/api/v3/fixtures/active",
+                    headers={"x-api-key": api_key},
+                    params={"sport": "darts", "page": page, "limit": 100},
+                )
+                if resp.status_code != 200:
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"Optic Odds /fixtures/active returned {resp.status_code}",
+                    )
+                body = resp.json()
+                all_raw.extend(body.get("data", []))
+                if not body.get("has_more", False):
+                    break
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"Optic Odds HTTP error: {exc}") from exc
+
+    log.info("optic_odds_darts_raw_fetched", count=len(all_raw))
+
+    # --- Parse fixtures ---
+    fixtures: list[dict[str, Any]] = []
+    for raw in all_raw:
+        participants = raw.get("participants") or []
+        home = participants[0] if len(participants) > 0 else {}
+        away = participants[1] if len(participants) > 1 else {}
+        league = raw.get("league") or raw.get("tournament") or {}
+
+        fixtures.append({
+            "fixture_id": raw.get("id", ""),
+            "league": league.get("name", "") if isinstance(league, dict) else str(league),
+            "league_id": league.get("id", "") if isinstance(league, dict) else "",
+            "player1_name": home.get("name", "") if isinstance(home, dict) else str(home),
+            "player2_name": away.get("name", "") if isinstance(away, dict) else str(away),
+            "start_date": raw.get("start_date", ""),
+            "status": raw.get("status", "not_started"),
+        })
+
+    # --- Auto-pricing phase ---
+    priced_count = 0
+    pricing_errors = 0
+
+    if auto_price and fixtures:
+        from competition.format_registry import get_format, DartsFormatError
+        from engines.leg_layer.hold_break_model import HoldBreakModel
+        from engines.match_layer.match_combinatorics import MatchCombinatorialEngine
+        from margin.blending_engine import DartsMarginEngine
+        from margin.shin_margin import ShinMarginModel
+
+        hb_model = HoldBreakModel()
+        match_engine = MatchCombinatorialEngine()
+        margin_engine = DartsMarginEngine()
+        shin_model = ShinMarginModel()
+
+        for i, fx in enumerate(fixtures):
+            if i >= max_price:
+                fx["priced"] = False
+                fx["pricing_error"] = "max_price limit reached"
+                continue
+
+            p1_name = fx.get("player1_name", "")
+            p2_name = fx.get("player2_name", "")
+            league_name = fx.get("league", "")
+
+            if not p1_name or not p2_name:
+                fx["priced"] = False
+                fx["pricing_error"] = "Missing player name(s)"
+                pricing_errors += 1
+                continue
+
+            # Look up player 3DA from DB by name (fuzzy match on first_name + last_name)
+            try:
+                p1_row = (await session.execute(
+                    sql_text("""
+                        SELECT id, dartsorakel_3da FROM darts_players
+                        WHERE LOWER(CONCAT(first_name, ' ', last_name)) = LOWER(:name)
+                        OR LOWER(nickname) = LOWER(:name)
+                        LIMIT 1
+                    """),
+                    {"name": p1_name.strip()},
+                )).fetchone()
+
+                p2_row = (await session.execute(
+                    sql_text("""
+                        SELECT id, dartsorakel_3da FROM darts_players
+                        WHERE LOWER(CONCAT(first_name, ' ', last_name)) = LOWER(:name)
+                        OR LOWER(nickname) = LOWER(:name)
+                        LIMIT 1
+                    """),
+                    {"name": p2_name.strip()},
+                )).fetchone()
+            except Exception as db_err:
+                fx["priced"] = False
+                fx["pricing_error"] = f"DB lookup error: {type(db_err).__name__}"
+                pricing_errors += 1
+                continue
+
+            p1_3da = p1_row.dartsorakel_3da if p1_row else None
+            p2_3da = p2_row.dartsorakel_3da if p2_row else None
+            p1_id = p1_row.id if p1_row else p1_name.lower().replace(" ", "-")
+            p2_id = p2_row.id if p2_row else p2_name.lower().replace(" ", "-")
+
+            if not p1_3da or not p2_3da:
+                fx["priced"] = False
+                fx["pricing_error"] = (
+                    f"Missing 3DA: p1={'found' if p1_3da else 'NOT_FOUND'}, "
+                    f"p2={'found' if p2_3da else 'NOT_FOUND'}"
+                )
+                fx["p1_found"] = p1_row is not None
+                fx["p2_found"] = p2_row is not None
+                pricing_errors += 1
+                continue
+
+            # Map league to competition_code and resolve format
+            comp_code = _map_league_to_comp(league_name)
+            try:
+                fmt = get_format(comp_code)
+                round_fmt = fmt.rounds[0]  # Default to first round
+            except (DartsFormatError, IndexError):
+                # Fallback: generic best-of-11 legs
+                comp_code = "PDC_PC"
+                try:
+                    fmt = get_format(comp_code)
+                    round_fmt = fmt.rounds[0]
+                except Exception:
+                    fx["priced"] = False
+                    fx["pricing_error"] = f"Format resolution failed for {comp_code}"
+                    pricing_errors += 1
+                    continue
+
+            # Compute hold/break probabilities from Markov engine
+            try:
+                legs_to_win = round_fmt.legs_to_win or 6
+                hb = hb_model.compute_from_3da(
+                    p1_id=p1_id,
+                    p2_id=p2_id,
+                    p1_three_da=p1_3da,
+                    p2_three_da=p2_3da,
+                )
+                p1_prob = match_engine.p1_win_probability(
+                    hb=hb,
+                    legs_to_win=legs_to_win,
+                    p1_starts=True,
+                )
+                p2_prob = 1.0 - p1_prob
+
+                # Apply margin via 5-factor engine + Shin model
+                base_margin = 0.05
+                final_margin = margin_engine.compute_margin(
+                    base_margin=base_margin,
+                    regime=1,
+                    starter_confidence=1.0,
+                    source_confidence=1.0,
+                    model_agreement=1.0,
+                    market_liquidity="high",
+                    ecosystem=fmt.ecosystem,
+                )
+                adjusted = shin_model.apply_shin_margin(
+                    true_probs={"p1": p1_prob, "p2": p2_prob},
+                    target_margin=final_margin,
+                )
+                p1_implied = adjusted["p1"]
+                p2_implied = adjusted["p2"]
+                p1_odds = round(1.0 / p1_implied, 3) if p1_implied > 0 else 999.0
+                p2_odds = round(1.0 / p2_implied, 3) if p2_implied > 0 else 999.0
+                overround = round(p1_implied + p2_implied - 1.0, 4)
+
+                fx["priced"] = True
+                fx["p1_win_prob"] = round(p1_prob, 4)
+                fx["p2_win_prob"] = round(p2_prob, 4)
+                fx["p1_odds"] = p1_odds
+                fx["p2_odds"] = p2_odds
+                fx["overround"] = overround
+                fx["model_data"] = {
+                    "p1_3da": p1_3da,
+                    "p2_3da": p2_3da,
+                    "p1_hold": round(hb.p1_hold, 4),
+                    "p1_break": round(hb.p1_break, 4),
+                    "competition_code": comp_code,
+                    "legs_to_win": legs_to_win,
+                }
+                fx["pricing_error"] = None
+                priced_count += 1
+
+                log.debug(
+                    "auto_priced_darts_fixture",
+                    fixture_id=fx["fixture_id"],
+                    p1=p1_name,
+                    p2=p2_name,
+                    p1_odds=p1_odds,
+                    p2_odds=p2_odds,
+                )
+
+            except Exception as price_err:
+                fx["priced"] = False
+                fx["pricing_error"] = f"{type(price_err).__name__}: {str(price_err)[:200]}"
+                pricing_errors += 1
+
+        log.info(
+            "optic_odds_darts_auto_pricing_complete",
+            priced=priced_count,
+            errors=pricing_errors,
+            total=len(fixtures),
+        )
+
+    return _ok(
+        {
+            "source": "Optic Odds",
+            "fixtures": fixtures,
+            "total": len(fixtures),
+            "auto_pricing": {
+                "enabled": auto_price,
+                "priced": priced_count,
+                "errors": pricing_errors,
+                "max_price": max_price,
+            },
         },
         request_id=request_id,
     )
