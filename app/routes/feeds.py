@@ -785,13 +785,13 @@ async def optic_odds_fixtures(
             comp_code = _map_league_to_comp(league_name)
             try:
                 fmt = get_format(comp_code)
-                round_fmt = fmt.rounds[0]  # Default to first round
-            except (DartsFormatError, IndexError):
+                round_fmt = next(iter(fmt.per_round.values()))  # Default to first round
+            except (DartsFormatError, IndexError, AttributeError, StopIteration):
                 # Fallback: generic best-of-11 legs
                 comp_code = "PDC_PC"
                 try:
                     fmt = get_format(comp_code)
-                    round_fmt = fmt.rounds[0]
+                    round_fmt = next(iter(fmt.per_round.values()))
                 except Exception:
                     fx["priced"] = False
                     fx["pricing_error"] = f"Format resolution failed for {comp_code}"
