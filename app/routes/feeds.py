@@ -662,19 +662,46 @@ async def optic_odds_fixtures(
     log.info("optic_odds_darts_raw_fetched", count=len(all_raw))
 
     # --- Parse fixtures ---
+    # BUG-DARTS-PLAYER-NAME-001: Optic Odds v3 uses
+    # "home_competitors"/"away_competitors" (array of Competitor objects)
+    # and "home_team_display"/"away_team_display" strings instead of
+    # the v2 "participants" array. Extract names with fallback chain.
+    def _extract_player(fixture: dict, side: str) -> str:
+        """Extract player name from Optic Odds v3 fixture dict."""
+        # 1. home_competitors / away_competitors (primary v3 field)
+        competitors = fixture.get(f"{side}_competitors")
+        if isinstance(competitors, list) and competitors:
+            first = competitors[0]
+            if isinstance(first, dict):
+                return first.get("name", "")
+        # 2. home_team_display / away_team_display
+        display = fixture.get(f"{side}_team_display")
+        if display and isinstance(display, str):
+            return display
+        # 3. Legacy participants array (v2)
+        participants = fixture.get("participants") or []
+        idx = 0 if side == "home" else 1
+        if len(participants) > idx:
+            p = participants[idx]
+            if isinstance(p, dict):
+                return p.get("name", "")
+            return str(p) if p else ""
+        # 4. Legacy home_team / away_team (dict or string)
+        raw = fixture.get(f"{side}_team", {})
+        if isinstance(raw, dict):
+            return raw.get("name", "")
+        return str(raw) if raw else ""
+
     fixtures: list[dict[str, Any]] = []
     for raw in all_raw:
-        participants = raw.get("participants") or []
-        home = participants[0] if len(participants) > 0 else {}
-        away = participants[1] if len(participants) > 1 else {}
         league = raw.get("league") or raw.get("tournament") or {}
 
         fixtures.append({
             "fixture_id": raw.get("id", ""),
             "league": league.get("name", "") if isinstance(league, dict) else str(league),
             "league_id": league.get("id", "") if isinstance(league, dict) else "",
-            "player1_name": home.get("name", "") if isinstance(home, dict) else str(home),
-            "player2_name": away.get("name", "") if isinstance(away, dict) else str(away),
+            "player1_name": _extract_player(raw, "home"),
+            "player2_name": _extract_player(raw, "away"),
             "start_date": raw.get("start_date", ""),
             "status": raw.get("status", "not_started"),
         })
