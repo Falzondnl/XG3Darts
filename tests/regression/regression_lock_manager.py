@@ -47,6 +47,20 @@ CRITICAL_MODULES: list[str] = [
     "props/prop_nine_darter.py",
     "outrights/tournament_simulator.py",
     "app/routes/live.py",
+    # Lock depth expansion (2026-03-25)
+    "app/main.py",
+    "app/routes/prematch.py",
+    "app/routes/events.py",
+    "app/routes/sgp.py",
+    "app/routes/settlement.py",
+    "app/routes/outrights.py",
+    "app/routes/props.py",
+    "app/routes/worldcup.py",
+    "app/routes/players.py",
+    "app/routes/trader.py",
+    "app/routes/liability.py",
+    "app/routes/feeds.py",
+    "app/routes/monitoring.py",
 ]
 
 FIXED_BUGS: list[str] = [

@@ -1,9 +1,8 @@
 {
-  "locked_at": "2026-03-21T19:31:49.833660+00:00",
-  "project_root": ".",
+  "locked_at": "2026-03-25T23:57:37.793370+00:00",
+  "project_root": "E:\\DF\\XG3V10\\darts\\XG3Darts",
   "fixed_bugs": [
-    "DARTS-LIVE-AUTH-001: pricing_authority='live_model_only' added to LivePriceResponse and LiveMarketsResponse in app/routes/live.py \u2014 sprint 44 live-blend assessment: darts live pricing uses visit-state Markov chain without Pinnacle logit-space blend.",
-    "DARTS-LIVE-BLEND-001: PricingLayer Pinnacle logit-space blend wired into POST /live/update, POST /live/price/{match_id}, GET /live/markets/{match_id} in app/routes/live.py \u2014 promoted darts from shadow to live_blended authoritative; pricing_authority=live_blended when Pinnacle available, live_model_only when not."
+    "DARTS-LIVE-AUTH-001: pricing_authority='live_model_only' added to LivePriceResponse and LiveMarketsResponse in app/routes/live.py \u2014 sprint 44 live-blend assessment: darts live pricing uses visit-state Markov chain without Pinnacle logit-space blend."
   ],
   "checksums": {
     "engines/state_layer/score_state.py": "fd3ea00362682a4de58cee9f0a0b7cefe17315119ca595bdfb5bfdffe5daf310",
@@ -24,6 +23,19 @@
     "props/prop_180.py": "21b1e6b066494023cef6fe6cf5775179aeea1b6f970a50d68a1cff4670c99ba9",
     "props/prop_nine_darter.py": "954afca98b7d830d996220721a0e6244207a13b96ed2af0cefc8bdcbf59b1e0d",
     "outrights/tournament_simulator.py": "0ee6bc8fac4f4bec1ba120f9c2e7596ec2edb7a92d916d248ada7cddadced377",
-    "app/routes/live.py": "a5105f7ed23047b42646434ed1dfa105a632011d6b17a99a1b5854a03b3a18bb"
+    "app/routes/live.py": "a5105f7ed23047b42646434ed1dfa105a632011d6b17a99a1b5854a03b3a18bb",
+    "app/main.py": "e2c1bcb30d908efa4d507f5d3ddd2a678b4affe24a66589a5c698c168403124a",
+    "app/routes/prematch.py": "221974320f57bd1096fa9083f46c928b706a85af7f87abe9707402255d9ca3dd",
+    "app/routes/events.py": "714177dd5a009b2e8179266fb2d573d2fe2d4cf2f8c68dba4936ce75b72bb0b5",
+    "app/routes/sgp.py": "3876cc4057d339e728dbfe8f84a2f59e9c04a96da5df0cb94f7b05bda87f6302",
+    "app/routes/settlement.py": "e53b3ed9abd3a835049d31bac5bf1cd84a11c5b5742d1b18dfb671fd75863346",
+    "app/routes/outrights.py": "12c2dd4959285a637a8ec80cdb9baf9bbaeb6728602918745aeb0bfc6cd21833",
+    "app/routes/props.py": "65f0678546c4d3b2bf31aaf2b294c56e9debf359cba0a43592ac898c4ccb2c8e",
+    "app/routes/worldcup.py": "a26aa7440c8c46c058230191d1b23766fcee9d658177813023cd0d2f24ea3773",
+    "app/routes/players.py": "26541a0f27b09ca9efe1028346249fdf1aab65c0ffd185e76993558510324bd5",
+    "app/routes/trader.py": "a346a817c2191297e9efa51c11b4e52b89e08123c2b6af75a1453ffc1996f711",
+    "app/routes/liability.py": "3ec44fc6cbd68333f66863bd4b41d903ae0ee4015b05a52c024a0f9dc1353513",
+    "app/routes/feeds.py": "3cb4162f75d958d6f7498a3c67db96aa2bf060e87be502c8fbafe3b713a9364f",
+    "app/routes/monitoring.py": "46ded0b5019d8174319edc103ddc3bc263a38588e7f2993900e5454c473b0db6"
   }
 }
