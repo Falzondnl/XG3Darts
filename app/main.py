@@ -5,6 +5,40 @@ Registers all API routers, configures structured logging via structlog,
 sets up middleware, and exposes health/readiness endpoints.
 
 API prefix: /api/v1/darts
+
+# ---------------------------------------------------------------------------
+# DESIGN NOTE — Autonomy Worker Architecture
+# ---------------------------------------------------------------------------
+#
+# Two worker classes exist in this repo:
+#
+#   app/workers/live_ops_worker.py  (DartsLiveOpsWorker)
+#       The Darts-specific live ops worker. Fully implements W1-W9:
+#       feed connection, auto-seed, auto-settle, completion detection,
+#       live state enumeration, restart recovery, in-process freshness
+#       worker, and singleton live engine. Started in lifespan below.
+#       This is the ACTIVE worker for Darts.
+#
+#   shared/autonomy_worker.py  (AutonomyWorker)
+#       A shared cross-sport backbone with the same fixture-poll /
+#       stale-check / health-log loop structure, used by other sport
+#       microservices that lack a dedicated worker.
+#
+# WHY AutonomyWorker IS NOT STARTED IN THIS LIFESPAN:
+#   DartsLiveOpsWorker already covers every responsibility the shared
+#   AutonomyWorker provides. Running both would create a duplicate
+#   fixture-poll loop calling Optic Odds /api/v3/fixtures/active every
+#   30 s, doubling API load and risking duplicate settlement triggers on
+#   completed events. The shared worker is retained for cross-sport reuse
+#   only; Darts does not need it.
+#
+# IF YOU ARE ADDING A NEW SPORT MS without a dedicated worker, start the
+# shared worker like this in its lifespan:
+#
+#   from shared.autonomy_worker import get_autonomy_worker
+#   worker = get_autonomy_worker("your_sport", optic_odds_api_key=settings.OPTIC_ODDS_API_KEY)
+#   await worker.start()
+# ---------------------------------------------------------------------------
 """
 from __future__ import annotations
 
@@ -239,11 +273,22 @@ def create_app() -> FastAPI:
             "version": settings.SERVICE_VERSION,
         }
 
+    @app.get("/health/live", include_in_schema=False)
+    async def health_live() -> dict[str, Any]:
+        """Liveness probe — always returns 200 while the process is running."""
+        return {
+            "status": "alive",
+            "service": settings.SERVICE_NAME,
+            "version": settings.SERVICE_VERSION,
+        }
+
     @app.get("/ready", include_in_schema=False)
+    @app.get("/health/ready", include_in_schema=False)
     async def readiness() -> dict[str, Any]:
         """
         Readiness probe — checks DB and Redis connectivity.
         Returns 200 when all dependencies are healthy.
+        Available at both /ready (legacy) and /health/ready (standard).
         """
         checks: dict[str, str] = {}
 
