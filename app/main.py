@@ -42,9 +42,43 @@ API prefix: /api/v1/darts
 """
 from __future__ import annotations
 
+import os
 import time
 from contextlib import asynccontextmanager
 from typing import Any
+
+# ---------------------------------------------------------------------------
+# Sentry error monitoring (set SENTRY_DSN env var to activate in production)
+# ---------------------------------------------------------------------------
+_SENTRY_DSN = os.getenv("SENTRY_DSN", "")
+if _SENTRY_DSN:
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.fastapi import FastApiIntegration
+        from sentry_sdk.integrations.starlette import StarletteIntegration
+        sentry_sdk.init(
+            dsn=_SENTRY_DSN,
+            integrations=[
+                StarletteIntegration(transaction_style="endpoint"),
+                FastApiIntegration(transaction_style="endpoint"),
+            ],
+            traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.1")),
+            profiles_sample_rate=float(os.getenv("SENTRY_PROFILES_SAMPLE_RATE", "0.1")),
+            environment=os.getenv("SENTRY_ENVIRONMENT", "production"),
+            release=f"xg3-darts@{os.getenv('RAILWAY_GIT_COMMIT_SHA', 'local')[:8]}",
+            send_default_pii=False,
+        )
+        import logging as _sentry_logging
+        _sentry_logging.getLogger("xg3_darts").info("[Sentry] Initialized — DSN configured")
+    except Exception as _sentry_err:
+        import logging as _sentry_logging
+        _sentry_logging.getLogger("xg3_darts").warning("[Sentry] Init failed: %s", _sentry_err)
+else:
+    import logging as _sentry_logging
+    _sentry_logging.getLogger("xg3_darts").warning(
+        "[Sentry] SENTRY_DSN not set — unhandled exceptions will NOT be captured. "
+        "Set SENTRY_DSN env var in Railway for production error monitoring."
+    )
 
 import structlog
 import uvicorn
