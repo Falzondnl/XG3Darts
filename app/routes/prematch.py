@@ -79,6 +79,9 @@ class MatchPriceRequest(BaseModel):
     market_liquidity: str = Field(default="high")
     base_margin: float = Field(default=0.05, gt=0.0, le=0.15)
     double_start_required: Optional[bool] = None
+    fixture_id: Optional[str] = Field(default=None, description="Optic Odds fixture ID for Pinnacle auto-fetch")
+    pinnacle_home_odds: Optional[float] = Field(default=None, gt=1.0, description="Explicit Pinnacle P1 odds")
+    pinnacle_away_odds: Optional[float] = Field(default=None, gt=1.0, description="Explicit Pinnacle P2 odds")
 
     @field_validator("market_liquidity")
     @classmethod
@@ -264,8 +267,34 @@ async def price_match_winner(request: MatchPriceRequest) -> dict[str, Any]:
     # for the 2-way blend. Darts has no draw in standard PDC formats.
     # Callers may pass Pinnacle odds in request as pinnacle_home_odds /
     # pinnacle_away_odds optional fields; absent → model-only fallback.
-    _pin_home_darts = getattr(request, "pinnacle_home_odds", None)
-    _pin_away_darts = getattr(request, "pinnacle_away_odds", None)
+    _pin_home_darts = request.pinnacle_home_odds
+    _pin_away_darts = request.pinnacle_away_odds
+
+    # Auto-fetch Pinnacle from Optic Odds REST when not explicitly provided
+    if _pin_home_darts is None and _pin_away_darts is None and request.fixture_id:
+        try:
+            import os, httpx
+            _optic_key = os.getenv("OPTIC_ODDS_API_KEY", "")
+            if _optic_key:
+                async with httpx.AsyncClient(timeout=5.0) as _cl:
+                    _r = await _cl.get(
+                        "https://api.opticodds.com/api/v3/fixtures/odds",
+                        params={"fixture_id": request.fixture_id, "market": "moneyline", "sportsbooks[]": ["pinnacle"]},
+                        headers={"X-Api-Key": _optic_key},
+                    )
+                    if _r.status_code == 200:
+                        for _bk in _r.json().get("data", [{}])[0].get("bookmakers", []):
+                            if "pinnacle" in _bk.get("name", "").lower():
+                                for _mkt in _bk.get("markets", []):
+                                    for _s in _mkt.get("selections", []):
+                                        if _s.get("name", "").lower() in ("home", "1"):
+                                            _pin_home_darts = _s.get("price")
+                                        elif _s.get("name", "").lower() in ("away", "2"):
+                                            _pin_away_darts = _s.get("price")
+                        if _pin_home_darts and _pin_away_darts:
+                            logger.info("[Prematch] Pinnacle auto-fetched: %.2f / %.2f for %s", _pin_home_darts, _pin_away_darts, request.fixture_id)
+        except Exception as _exc:
+            logger.debug("[Prematch] Pinnacle auto-fetch failed: %s — model-only", _exc)
     _darts_blend = _blend_layer.blend_sync(
         model_prob=match_result.p1_win,
         pinnacle_home_odds=float(_pin_home_darts) if _pin_home_darts is not None else None,
