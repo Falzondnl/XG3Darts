@@ -61,3 +61,4 @@ ENV PYTHONUNBUFFERED=1 \
 
 # Start: run Alembic migrations then launch API
 CMD ["/app/startup.sh"]
+# rebuild-trigger-1774596089
