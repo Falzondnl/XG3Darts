@@ -283,14 +283,15 @@ async def price_match_winner(request: MatchPriceRequest) -> dict[str, Any]:
                         headers={"X-Api-Key": _optic_key},
                     )
                     if _r.status_code == 200:
-                        for _bk in _r.json().get("data", [{}])[0].get("bookmakers", []):
-                            if "pinnacle" in _bk.get("name", "").lower():
-                                for _mkt in _bk.get("markets", []):
-                                    for _s in _mkt.get("selections", []):
-                                        if _s.get("name", "").lower() in ("home", "1"):
-                                            _pin_home_darts = _s.get("price")
-                                        elif _s.get("name", "").lower() in ("away", "2"):
-                                            _pin_away_darts = _s.get("price")
+                        for _entry in _r.json().get("data", [{}])[0].get("odds", []):
+                            if _entry.get("market_id") == "moneyline":
+                                _american = _entry.get("price", 0)
+                                _dec = (1 + _american / 100) if _american > 0 else (1 + 100 / abs(_american)) if _american < 0 else 0
+                                if _dec > 1.0 and _entry.get("selection_line") is None:
+                                    if not _pin_home_darts:
+                                        _pin_home_darts = _dec
+                                    else:
+                                        _pin_away_darts = _dec
                         if _pin_home_darts and _pin_away_darts:
                             logger.info("[Prematch] Pinnacle auto-fetched: %.2f / %.2f for %s", _pin_home_darts, _pin_away_darts, request.fixture_id)
         except Exception as _exc:
