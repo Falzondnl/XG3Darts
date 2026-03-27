@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     # Service identity
     # ------------------------------------------------------------------ #
     SERVICE_NAME: str = "xg3-darts"
-    SERVICE_VERSION: str = "0.1.0"
+    SERVICE_VERSION: str = "0.1.1"
     ENVIRONMENT: str = Field(default="development", description="production | staging | development")
     LOG_LEVEL: str = Field(default="INFO", description="DEBUG | INFO | WARNING | ERROR")
 
