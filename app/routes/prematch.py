@@ -305,12 +305,21 @@ async def price_match_winner(request: MatchPriceRequest) -> dict[str, Any]:
     _blended_p1 = _darts_blend.blended_prob
     _blended_p2 = 1.0 - _blended_p1
 
-    true_probs: dict[str, float] = {
-        "p1_win": _blended_p1,
-        "p2_win": _blended_p2,
-    }
-    if match_result.draw > 0:
-        true_probs["draw"] = match_result.draw
+    # BUG-DARTS-PROB-NORM-001: When draw > 0, p1+p2 must be scaled down so
+    # p1 + p2 + draw = 1.0.  Previously draw was added on top → sum > 1.0.
+    _draw = match_result.draw if match_result.draw > 0 else 0.0
+    if _draw > 0:
+        _scale = (1.0 - _draw) / max(_blended_p1 + _blended_p2, 1e-9)
+        true_probs: dict[str, float] = {
+            "p1_win": _blended_p1 * _scale,
+            "p2_win": _blended_p2 * _scale,
+            "draw": _draw,
+        }
+    else:
+        true_probs: dict[str, float] = {
+            "p1_win": _blended_p1,
+            "p2_win": _blended_p2,
+        }
 
     adjusted, margin = _apply_margin(request, fmt, true_probs)
     decimal_odds = {
@@ -834,12 +843,20 @@ async def price_ecosystem_match(request: EcosystemPriceRequest) -> dict[str, Any
         blended_p1 = match_result.p1_win
         blended_p2 = match_result.p2_win
 
-    true_probs: dict[str, float] = {
-        "p1_win": blended_p1,
-        "p2_win": blended_p2,
-    }
-    if match_result.draw > 0:
-        true_probs["draw"] = match_result.draw
+    # BUG-DARTS-PROB-NORM-001: normalize when draw > 0
+    _draw2 = match_result.draw if match_result.draw > 0 else 0.0
+    if _draw2 > 0:
+        _scale2 = (1.0 - _draw2) / max(blended_p1 + blended_p2, 1e-9)
+        true_probs: dict[str, float] = {
+            "p1_win": blended_p1 * _scale2,
+            "p2_win": blended_p2 * _scale2,
+            "draw": _draw2,
+        }
+    else:
+        true_probs: dict[str, float] = {
+            "p1_win": blended_p1,
+            "p2_win": blended_p2,
+        }
 
     # Build a modified request with the effective regime for margin computation
     margin_req = request.model_copy(update={"regime": effective_regime})
@@ -1177,9 +1194,13 @@ async def smart_price(
         final_p1, final_p2 = markov_p1_win, markov_p2_win
         pricing_model = "markov_only"
 
-    true_probs: dict[str, float] = {"p1_win": final_p1, "p2_win": final_p2}
-    if match_result.draw > 0:
-        true_probs["draw"] = match_result.draw
+    # BUG-DARTS-PROB-NORM-001: normalize when draw > 0
+    _draw3 = match_result.draw if match_result.draw > 0 else 0.0
+    if _draw3 > 0:
+        _scale3 = (1.0 - _draw3) / max(final_p1 + final_p2, 1e-9)
+        true_probs: dict[str, float] = {"p1_win": final_p1 * _scale3, "p2_win": final_p2 * _scale3, "draw": _draw3}
+    else:
+        true_probs: dict[str, float] = {"p1_win": final_p1, "p2_win": final_p2}
 
     adjusted, margin = _apply_margin(inner, fmt, true_probs)
     decimal_odds = {k: round(1.0 / v, 4) if v > 1e-9 else None for k, v in adjusted.items()}
