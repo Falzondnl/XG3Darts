@@ -1,0 +1,16 @@
+# Railway upload ignore — DO NOT exclude model pkl/cbm/joblib files
+# .gitignore has *.pkl rules for local dev, but Railway needs these
+# files in the Docker build context for model loading.
+__pycache__/
+*.pyc
+.git/
+.env
+.venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+node_modules/
+*.log
+
