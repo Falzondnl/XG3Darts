@@ -279,7 +279,7 @@ async def price_match_winner(request: MatchPriceRequest) -> dict[str, Any]:
                 async with httpx.AsyncClient(timeout=5.0) as _cl:
                     _r = await _cl.get(
                         "https://api.opticodds.com/api/v3/fixtures/odds",
-                        params={"fixture_id": request.fixture_id, "market": "moneyline", "sportsbooks[]": ["pinnacle"]},
+                        params={"fixture_id": request.fixture_id, "market": "moneyline", "sportsbook": "pinnacle"},
                         headers={"X-Api-Key": _optic_key},
                     )
                     if _r.status_code == 200:
