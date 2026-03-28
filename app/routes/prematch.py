@@ -295,7 +295,7 @@ async def price_match_winner(request: MatchPriceRequest) -> dict[str, Any]:
                         if _pin_home_darts and _pin_away_darts:
                             logger.info("[Prematch] Pinnacle auto-fetched: %.2f / %.2f for %s", _pin_home_darts, _pin_away_darts, request.fixture_id)
         except Exception as _exc:
-            logger.debug("[Prematch] Pinnacle auto-fetch failed: %s — model-only", _exc)
+            logger.warning("[Prematch] Pinnacle auto-fetch failed: %s — model-only", _exc)
     _darts_blend = _blend_layer.blend_sync(
         model_prob=match_result.p1_win,
         pinnacle_home_odds=float(_pin_home_darts) if _pin_home_darts is not None else None,
