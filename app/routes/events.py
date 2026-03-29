@@ -163,6 +163,28 @@ async def list_current_events(
 
 
 @router.get(
+    "/events/search",
+    summary="Search events by name or competition code",
+    tags=["Events"],
+)
+async def search_events(
+    q: str = Query(..., min_length=2, description="Search query"),
+) -> dict[str, Any]:
+    """Search the tournament calendar by name or competition code."""
+    q_lower = q.lower()
+    matches = [
+        e for e in PDC_CALENDAR_2026
+        if q_lower in e["name"].lower() or q_lower in e["code"].lower()
+        or q_lower in e["event_id"].lower()
+    ]
+    return {
+        "query": q,
+        "count": len(matches),
+        "events": matches,
+    }
+
+
+@router.get(
     "/events/{event_id}",
     summary="Get event details and fixture list",
     tags=["Events"],
@@ -245,28 +267,6 @@ async def get_event(
             "self": _service_url(f"/events/{event_id}"),
             "price_all": _service_url(f"/events/{event_id}/price-all"),
         },
-    }
-
-
-@router.get(
-    "/events/search",
-    summary="Search events by name or competition code",
-    tags=["Events"],
-)
-async def search_events(
-    q: str = Query(..., min_length=2, description="Search query"),
-) -> dict[str, Any]:
-    """Search the tournament calendar by name or competition code."""
-    q_lower = q.lower()
-    matches = [
-        e for e in PDC_CALENDAR_2026
-        if q_lower in e["name"].lower() or q_lower in e["code"].lower()
-        or q_lower in e["event_id"].lower()
-    ]
-    return {
-        "query": q,
-        "count": len(matches),
-        "events": matches,
     }
 
 
