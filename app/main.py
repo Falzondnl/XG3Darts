@@ -89,6 +89,7 @@ from fastapi.responses import JSONResponse
 from app.auth import api_key_middleware
 from app.config import settings
 from app.routes import (
+    derivatives,
     events,
     feeds,
     liability,
@@ -101,6 +102,7 @@ from app.routes import (
     settlement,
     sgp,
     trader,
+    trading_controls,
     worldcup,
 )
 from app.routes.monitoring import router as monitoring_router
@@ -275,6 +277,8 @@ def create_app() -> FastAPI:
     # Routers
     api_prefix = "/api/v1/darts"
     app.include_router(prematch.router, prefix=api_prefix, tags=["Pre-Match"])
+    app.include_router(derivatives.router, prefix=api_prefix, tags=["Derivatives"])
+    app.include_router(trading_controls.router, prefix=api_prefix, tags=["Trading Controls"])
     app.include_router(events.router, prefix=api_prefix, tags=["Events"])
     app.include_router(live.router, prefix=api_prefix, tags=["Live"])
     app.include_router(outrights.router, prefix=api_prefix, tags=["Outrights"])
