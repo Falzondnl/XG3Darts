@@ -92,6 +92,8 @@ from app.routes import (
     derivatives,
     events,
     feeds,
+    form,
+    h2h,
     liability,
     live,
     monitoring,
@@ -291,6 +293,8 @@ def create_app() -> FastAPI:
     app.include_router(trader.router, prefix=api_prefix, tags=["Trader"])
     app.include_router(feeds.router, prefix=api_prefix, tags=["Feeds"])
     app.include_router(settlement.router, prefix=api_prefix, tags=["Settlement"])
+    app.include_router(h2h.router, prefix=api_prefix, tags=["H2H"])
+    app.include_router(form.router, prefix=api_prefix, tags=["Form"])
 
     # Prometheus metrics endpoint (scraped by external Prometheus server)
     try:
