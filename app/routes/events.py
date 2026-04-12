@@ -131,24 +131,122 @@ async def list_current_events(
         description="Filter by status: active | upcoming | completed",
     ),
     limit: int = Query(20, ge=1, le=100),
+    session: AsyncSession = Depends(get_session_dependency),
 ) -> dict[str, Any]:
     """
-    Return the current PDC/WDF tournament calendar.
+    Return current PDC/WDF fixtures.
 
-    Active tournaments are returned first, then upcoming, then completed.
+    Primary source: ``darts_matches`` DB table (rows seeded by
+    DartsLiveOpsWorker from Optic Odds).  If the DB table is empty
+    (e.g. first deploy before the worker has run), falls back to the
+    static PDC_CALENDAR_2026 fixture list for compatibility.
+
+    DB fixtures are ordered by match_date ascending.
+    Static fallback is ordered: active → upcoming → completed.
     """
-    events = sorted(
+    from sqlalchemy import text as sql_text
+    from datetime import date as _date_type
+
+    db_events: list[dict[str, Any]] = []
+
+    try:
+        result = await session.execute(
+            sql_text("""
+                SELECT
+                    m.id          AS match_id,
+                    m.match_date,
+                    m.match_time,
+                    m.status,
+                    m.round_name,
+                    m.pdc_fixture_id,
+                    COALESCE(p1.first_name || ' ' || p1.last_name, 'TBD') AS player1_name,
+                    COALESCE(p2.first_name || ' ' || p2.last_name, 'TBD') AS player2_name,
+                    COALESCE(c.name, 'Unknown Competition')                AS competition_name,
+                    COALESCE(c.code, '')                                   AS competition_code
+                FROM darts_matches m
+                LEFT JOIN darts_players p1   ON p1.id = m.player1_id
+                LEFT JOIN darts_players p2   ON p2.id = m.player2_id
+                LEFT JOIN darts_competitions c ON c.id = m.competition_id
+                WHERE m.status IN ('Fixture', 'Live', 'Upcoming')
+                  AND (m.match_date IS NULL OR m.match_date >= CURRENT_DATE)
+                ORDER BY m.match_date ASC NULLS LAST, m.match_time ASC NULLS LAST
+                LIMIT :lim
+            """),
+            {"lim": min(limit * 3, 300)},
+        )
+        rows = result.mappings().all()
+
+        for row in rows:
+            row_status = (row["status"] or "Fixture").lower()
+            # Normalise DB status to match static calendar vocabulary
+            if row_status in ("live",):
+                norm_status = "active"
+            elif row_status in ("fixture", "upcoming"):
+                norm_status = "upcoming"
+            else:
+                norm_status = row_status
+
+            if status and norm_status != status:
+                continue
+
+            match_date_raw = row["match_date"]
+            match_date_str = (
+                match_date_raw.isoformat()
+                if isinstance(match_date_raw, _date_type)
+                else str(match_date_raw or "")
+            )
+            pdc_id = row["pdc_fixture_id"]
+            event_id = f"db_{row['match_id']}"
+            db_events.append({
+                "event_id": event_id,
+                "name": f"{row['player1_name']} vs {row['player2_name']}",
+                "competition": row["competition_name"],
+                "code": row["competition_code"],
+                "round": row["round_name"],
+                "date": match_date_str,
+                "time": row["match_time"] or "",
+                "pdc_fixture_id": pdc_id,
+                "status": norm_status,
+                "source": "db",
+                "_links": {
+                    "event": _service_url(f"/events/{event_id}"),
+                    "price_all": _service_url(f"/events/{event_id}/price-all"),
+                },
+            })
+    except Exception as exc:
+        logger.warning(
+            "events_current_db_query_failed",
+            error=str(exc),
+            detail="Falling back to static PDC_CALENDAR_2026",
+        )
+
+    # ── DB results available — return them (trimmed to limit) ────────────────
+    if db_events:
+        return {
+            "count": len(db_events[:limit]),
+            "events": db_events[:limit],
+            "source": "db",
+            "_links": {"self": _service_url("/events/current")},
+        }
+
+    # ── Fallback: static PDC calendar ────────────────────────────────────────
+    logger.info(
+        "events_current_db_empty",
+        detail="DB table is empty — returning static PDC_CALENDAR_2026 fallback",
+    )
+    static_events = sorted(
         PDC_CALENDAR_2026,
         key=lambda e: (_STATUS_ORDER.get(e["status"], 9), e["date"]),
     )
     if status:
-        events = [e for e in events if e["status"] == status]
+        static_events = [e for e in static_events if e["status"] == status]
 
-    events = events[:limit]
+    static_events = static_events[:limit]
     enriched = []
-    for ev in events:
+    for ev in static_events:
         enriched.append({
             **ev,
+            "source": "static_fallback",
             "_links": {
                 "event": _service_url(f"/events/{ev['event_id']}"),
                 "price_all": _service_url(f"/events/{ev['event_id']}/price-all"),
@@ -158,6 +256,7 @@ async def list_current_events(
     return {
         "count": len(enriched),
         "events": enriched,
+        "source": "static_fallback",
         "_links": {"self": _service_url("/events/current")},
     }
 
