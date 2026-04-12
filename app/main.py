@@ -108,6 +108,7 @@ from app.routes import (
     worldcup,
 )
 from app.routes.monitoring import router as monitoring_router
+from app.routes.predict import router as predict_router
 
 
 # ---------------------------------------------------------------------------
@@ -295,6 +296,7 @@ def create_app() -> FastAPI:
     app.include_router(settlement.router, prefix=api_prefix, tags=["Settlement"])
     app.include_router(h2h.router, prefix=api_prefix, tags=["H2H"])
     app.include_router(form.router, prefix=api_prefix, tags=["Form"])
+    app.include_router(predict_router, prefix=api_prefix, tags=["Predict"])
 
     # Prometheus metrics endpoint (scraped by external Prometheus server)
     try:
