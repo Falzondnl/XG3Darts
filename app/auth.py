@@ -142,16 +142,24 @@ async def api_key_middleware(request: Request, call_next):
             )
         return await call_next(request)
 
+    # P2-003 FIX: Accept both X-Api-Key header AND Authorization: Bearer <token>
+    # for backward compatibility with B2B clients using either auth format.
+    # Resolution order: X-Api-Key header (preferred) → Authorization: Bearer <token>
     api_key: Optional[str] = request.headers.get("X-Api-Key")
+    if not api_key:
+        auth_header: Optional[str] = request.headers.get("Authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            api_key = auth_header[7:].strip() or None
+
     if not api_key:
         logger.warning("auth_missing_key", path=path, method=request.method)
         return JSONResponse(
             status_code=status.HTTP_401_UNAUTHORIZED,
             content={
                 "error": "unauthorized",
-                "message": "X-Api-Key header is required.",
+                "message": "Authentication required. Provide X-Api-Key header or Authorization: Bearer <token>.",
             },
-            headers={"WWW-Authenticate": "ApiKey"},
+            headers={"WWW-Authenticate": 'Bearer realm="XG3 Darts API", charset="UTF-8"'},
         )
 
     if not _is_valid_key(api_key):
