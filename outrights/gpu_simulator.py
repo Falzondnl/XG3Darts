@@ -41,14 +41,19 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 if NUMBA_AVAILABLE:
-    @njit(parallel=True, cache=True, fastmath=True)  # type: ignore[misc]
+    @njit(cache=True, fastmath=True)  # type: ignore[misc]
     def _simulate_bracket_cpu(
         win_prob_matrix: np.ndarray,
         n_simulations: int,
         seeds: np.ndarray,
     ) -> np.ndarray:
         """
-        Numba-compiled CPU parallel bracket simulator.
+        Numba-compiled CPU bracket simulator (serial — no prange).
+
+        Using serial range instead of prange avoids the race condition on
+        win_counts[winner] += 1 that occurs with non-atomic int32 writes
+        in a parallel loop.  Each simulation runs sequentially so the
+        win_counts array is always consistent and sums to exactly n_simulations.
 
         Parameters
         ----------
@@ -67,7 +72,7 @@ if NUMBA_AVAILABLE:
         n_players = win_prob_matrix.shape[0]
         win_counts = np.zeros(n_players, dtype=np.int32)
 
-        for sim_idx in prange(n_simulations):  # type: ignore[call-overload]
+        for sim_idx in range(n_simulations):
             # LCG state — unique per simulation
             state = np.uint64(seeds[sim_idx])
             a = np.uint64(6364136223846793005)
