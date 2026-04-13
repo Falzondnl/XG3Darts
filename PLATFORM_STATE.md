@@ -1,6 +1,6 @@
 # XG3 Darts — Platform State
 
-**Last updated: 2026-03-16 (v2.1)**
+**Last updated: 2026-04-13 (v2.1) — predict route active since ee46024, force redeploy**
 **Version: Darts Tier-1 V2**
 
 ---
