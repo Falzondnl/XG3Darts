@@ -172,8 +172,14 @@ class DartsTournamentSimulator:
                     win_prob_matrix=win_matrix,
                     n_simulations=n_simulations,
                 )
+                # Normalise by actual counted wins (not n_simulations) to
+                # guard against dropped increments from the parallel Numba
+                # kernel's non-atomic int32 writes under prange.
+                actual_gpu_sims = int(win_counts.sum())
+                if actual_gpu_sims == 0:
+                    actual_gpu_sims = n_simulations  # defensive — avoid /0
                 win_probs = {
-                    field.players[i]: float(win_counts[i]) / n_simulations
+                    field.players[i]: float(win_counts[i]) / actual_gpu_sims
                     for i in range(n_players)
                 }
                 top4_probs = {pid: 0.0 for pid in field.players}
