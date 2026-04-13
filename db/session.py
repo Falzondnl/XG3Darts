@@ -28,20 +28,34 @@ from app.config import settings
 
 
 def _build_engine() -> AsyncEngine:
-    """Build the async SQLAlchemy engine from application settings."""
-    return create_async_engine(
-        settings.DATABASE_URL,
-        echo=settings.DB_ECHO,
-        pool_size=settings.DB_POOL_SIZE,
-        max_overflow=settings.DB_MAX_OVERFLOW,
-        pool_pre_ping=True,
-        pool_recycle=1800,
-        pool_timeout=20,
-        connect_args={
-            "timeout": 10,           # asyncpg TCP connect timeout (seconds)
-            "command_timeout": 30,   # per-query timeout
-        },
-    )
+    """Build the async SQLAlchemy engine from application settings.
+
+    SQLite (aiosqlite) does not support pool_size, max_overflow, pool_timeout,
+    pool_recycle, or pool_pre_ping — those kwargs are PostgreSQL/asyncpg only.
+    We detect SQLite by URL prefix and strip the incompatible kwargs.
+    """
+    url = str(settings.DATABASE_URL)
+    is_sqlite = url.startswith("sqlite")
+
+    kwargs: dict = {
+        "echo": settings.DB_ECHO,
+    }
+
+    if not is_sqlite:
+        # PostgreSQL / asyncpg — full pool config
+        kwargs.update({
+            "pool_size": settings.DB_POOL_SIZE,
+            "max_overflow": settings.DB_MAX_OVERFLOW,
+            "pool_pre_ping": True,
+            "pool_recycle": 1800,
+            "pool_timeout": 20,
+            "connect_args": {
+                "timeout": 10,           # asyncpg TCP connect timeout (seconds)
+                "command_timeout": 30,   # per-query timeout
+            },
+        })
+
+    return create_async_engine(url, **kwargs)
 
 
 # Module-level engine and session factory — initialised once at import time.
