@@ -1,5 +1,5 @@
 {
-  "locked_at": "2026-03-25T23:57:37.793370+00:00",
+  "locked_at": "2026-04-13T06:37:31.488805+00:00",
   "project_root": "E:\\DF\\XG3V10\\darts\\XG3Darts",
   "fixed_bugs": [
     "DARTS-LIVE-AUTH-001: pricing_authority='live_model_only' added to LivePriceResponse and LiveMarketsResponse in app/routes/live.py \u2014 sprint 44 live-blend assessment: darts live pricing uses visit-state Markov chain without Pinnacle logit-space blend."
@@ -22,11 +22,11 @@
     "sgp/copula_builder.py": "051567d646eac93927c775f225cdc2919ecfc085e01023c327be30a1ccb77f3f",
     "props/prop_180.py": "21b1e6b066494023cef6fe6cf5775179aeea1b6f970a50d68a1cff4670c99ba9",
     "props/prop_nine_darter.py": "954afca98b7d830d996220721a0e6244207a13b96ed2af0cefc8bdcbf59b1e0d",
-    "outrights/tournament_simulator.py": "0ee6bc8fac4f4bec1ba120f9c2e7596ec2edb7a92d916d248ada7cddadced377",
+    "outrights/tournament_simulator.py": "af1efa4eaed700a57a074f7a90c125903877d3707825496be91381f6e2e1b86e",
     "app/routes/live.py": "a5105f7ed23047b42646434ed1dfa105a632011d6b17a99a1b5854a03b3a18bb",
-    "app/main.py": "e2c1bcb30d908efa4d507f5d3ddd2a678b4affe24a66589a5c698c168403124a",
-    "app/routes/prematch.py": "221974320f57bd1096fa9083f46c928b706a85af7f87abe9707402255d9ca3dd",
-    "app/routes/events.py": "714177dd5a009b2e8179266fb2d573d2fe2d4cf2f8c68dba4936ce75b72bb0b5",
+    "app/main.py": "96f2397c04b04e98916b83a649a52bcdbae6bea641e5631f46805c8ea5b0d1af",
+    "app/routes/prematch.py": "eb60b311f515889c6ee381e178f8821507445b07e2ab354011a74799d3cbed31",
+    "app/routes/events.py": "c4dcb66c2c69de36d3b3e5c10d17d69a5023823b333a439dabd04ebb59c11187",
     "app/routes/sgp.py": "3876cc4057d339e728dbfe8f84a2f59e9c04a96da5df0cb94f7b05bda87f6302",
     "app/routes/settlement.py": "e53b3ed9abd3a835049d31bac5bf1cd84a11c5b5742d1b18dfb671fd75863346",
     "app/routes/outrights.py": "12c2dd4959285a637a8ec80cdb9baf9bbaeb6728602918745aeb0bfc6cd21833",
