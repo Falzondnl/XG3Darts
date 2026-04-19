@@ -145,6 +145,62 @@ def logit_blend(prob_a: float, prob_b: float, weight_a: float) -> float:
     return sigmoid(blended_logit)
 
 
+def blend_with_pinnacle(
+    model_prob: float,
+    pinnacle_prob: Optional[float],
+    weight: float = 0.25,
+) -> float:
+    """Blend a model probability with a Pinnacle market probability in logit space.
+
+    Darts-specific entry point with explicit 25% model / 75% Pinnacle weighting.
+    Operates in logit space to avoid linear-averaging bias near 0 and 1.
+
+    Parameters
+    ----------
+    model_prob:
+        Raw ML model P(player1 wins) in (0, 1).
+    pinnacle_prob:
+        Devigged Pinnacle P(player1 wins).  When None or outside (0.001, 0.999),
+        the model probability is returned unchanged — no silent fallback to a
+        constant is ever produced.
+    weight:
+        Model weight.  Default 0.25 means 25% model, 75% Pinnacle.
+        Caller may override for testing; production code uses the default.
+
+    Returns
+    -------
+    float
+        Logit-blended probability in (0, 1).
+
+    Raises
+    ------
+    RuntimeError
+        If model_prob is outside (0, 1) — indicates a broken upstream model.
+    """
+    if not (0.0 < model_prob < 1.0):
+        raise RuntimeError(
+            f"blend_with_pinnacle: model_prob={model_prob!r} is outside (0, 1). "
+            "Upstream model returned an invalid probability."
+        )
+
+    if pinnacle_prob is None or not (0.001 < pinnacle_prob < 0.999):
+        # Pinnacle unavailable or degenerate — return model probability unmodified.
+        # Never return a hardcoded constant.
+        logger.debug(
+            "blend_with_pinnacle: pinnacle_prob unavailable or degenerate "
+            "(value=%r); returning model_prob unchanged",
+            pinnacle_prob,
+        )
+        return model_prob
+
+    if not (0.0 < weight < 1.0):
+        raise RuntimeError(
+            f"blend_with_pinnacle: weight={weight!r} must be strictly in (0, 1)."
+        )
+
+    return logit_blend(prob_a=model_prob, prob_b=pinnacle_prob, weight_a=weight)
+
+
 def devig_2way(odds_1: float, odds_2: float) -> tuple[float, float]:
     """Remove vig from 2-way market odds. Returns fair probabilities.
 

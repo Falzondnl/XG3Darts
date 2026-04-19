@@ -1005,6 +1005,21 @@ class SmartPriceRequest(BaseModel):
     base_margin: float = Field(default=0.05, gt=0.0, le=0.15)
     fallback_3da: float = Field(default=50.0, gt=0, lt=200,
                                  description="3DA fallback if not in DB")
+    # Pinnacle blend — optional.  When provided, the Markov+ML probability is
+    # further blended with Pinnacle in logit space (30% model / 70% Pinnacle,
+    # per darts BlendConfig) before margin is applied.
+    fixture_id: Optional[str] = Field(
+        None,
+        description="Optic Odds fixture ID — triggers automatic Pinnacle fetch when OPTIC_ODDS_API_KEY is set",
+    )
+    pinnacle_home_odds: Optional[float] = Field(
+        None, gt=1.0,
+        description="Explicit Pinnacle decimal odds for player 1",
+    )
+    pinnacle_away_odds: Optional[float] = Field(
+        None, gt=1.0,
+        description="Explicit Pinnacle decimal odds for player 2",
+    )
 
 
 @router.post(
@@ -1194,6 +1209,42 @@ async def smart_price(
         final_p1, final_p2 = markov_p1_win, markov_p2_win
         pricing_model = "markov_only"
 
+    # --- Pinnacle logit blend (darts config: 30% model / 70% Pinnacle) ---
+    # Applied on top of the Markov+ML blended probability.  When no Pinnacle
+    # data is available the probability passes through unchanged.
+    _smart_pin_home = request.pinnacle_home_odds
+    _smart_pin_away = request.pinnacle_away_odds
+    _smart_pinnacle_source = "none"
+
+    if _smart_pin_home is None and _smart_pin_away is None and request.fixture_id:
+        # Auto-fetch Pinnacle via PricingLayer when fixture_id provided.
+        try:
+            _smart_blend_pre = await _blend_layer.blend_pre_match(
+                fixture_id=request.fixture_id,
+                model_prob=final_p1,
+                market_type="moneyline",
+            )
+            if _smart_blend_pre.source != "model_only":
+                final_p1 = _smart_blend_pre.blended_prob
+                final_p2 = 1.0 - final_p1
+                _smart_pinnacle_source = "optic_auto"
+                pricing_model = f"{pricing_model}_pinnacle"
+        except Exception as _sp_err:
+            logger.warning("smart_price_pinnacle_auto_fetch_failed", error=str(_sp_err))
+    elif _smart_pin_home is not None and _smart_pin_away is not None:
+        # Explicit Pinnacle odds provided — use blend_sync().
+        _smart_blend_sync = _blend_layer.blend_sync(
+            model_prob=final_p1,
+            pinnacle_home_odds=float(_smart_pin_home),
+            pinnacle_away_odds=float(_smart_pin_away),
+            pinnacle_draw_odds=None,
+        )
+        if _smart_blend_sync.source != "model_only":
+            final_p1 = _smart_blend_sync.blended_prob
+            final_p2 = 1.0 - final_p1
+            _smart_pinnacle_source = "explicit"
+            pricing_model = f"{pricing_model}_pinnacle"
+
     # BUG-DARTS-PROB-NORM-001: normalize when draw > 0
     _draw3 = match_result.draw if match_result.draw > 0 else 0.0
     if _draw3 > 0:
@@ -1228,6 +1279,7 @@ async def smart_price(
             "markov_p1_win": round(markov_p1_win, 6),
             "ml_p1_win": round(ml_p1_win, 6) if ml_p1_win is not None else None,
             "ml_source": ml_source,
+            "pinnacle_blend_source": _smart_pinnacle_source,
         },
         "data_sources": {
             "three_da": "db" if not _db_error else "fallback",

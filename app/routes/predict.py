@@ -25,6 +25,10 @@ from fastapi import APIRouter, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
+from shared.pricing_layer import blend_with_pinnacle, devig_2way, fetch_pinnacle_odds, get_pricing_layer
+
+_darts_pricing_layer = get_pricing_layer("darts")
+
 logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["Predict"])
 
@@ -131,6 +135,22 @@ class DartsPredictRequest(BaseModel):
         description="Player 1 win rate in H2H matches",
     )
 
+    # Pinnacle blend inputs — optional.  When provided, the ML probability is
+    # blended with Pinnacle in logit space (25% model / 75% Pinnacle) before
+    # being returned.  When absent, the raw ML probability is returned.
+    fixture_id: Optional[str] = Field(
+        None,
+        description="Optic Odds fixture ID — triggers automatic Pinnacle fetch when OPTIC_ODDS_API_KEY is set",
+    )
+    pinnacle_home_odds: Optional[float] = Field(
+        None, gt=1.0,
+        description="Explicit Pinnacle decimal odds for player 1 (devigged internally)",
+    )
+    pinnacle_away_odds: Optional[float] = Field(
+        None, gt=1.0,
+        description="Explicit Pinnacle decimal odds for player 2 (devigged internally)",
+    )
+
     @field_validator("ecosystem")
     @classmethod
     def validate_ecosystem(cls, v: str) -> str:
@@ -226,8 +246,14 @@ def _infer_format_code(format_str: Optional[str]) -> str:
     return ""
 
 
-def _run_r1_inference(req: DartsPredictRequest, p1_elo: float, p2_elo: float,
-                      p1_3da: float, p2_3da: float) -> Dict[str, Any]:
+def _run_r1_inference(
+    req: DartsPredictRequest,
+    p1_elo: float,
+    p2_elo: float,
+    p1_3da: float,
+    p2_3da: float,
+    pinnacle_prob: Optional[float] = None,
+) -> Dict[str, Any]:
     """
     Run R1 file-based inference. Returns prediction dict.
 
@@ -256,15 +282,28 @@ def _run_r1_inference(req: DartsPredictRequest, p1_elo: float, p2_elo: float,
     if p1_win is None:
         raise RuntimeError("R1 model files not found on disk — cannot predict")
 
-    # Clamp to valid range and normalise
-    p1_win = float(max(0.01, min(0.99, p1_win)))
-    p2_win = 1.0 - p1_win
+    # Clamp raw ML output to valid probability range before blend.
+    p1_win_model = float(max(0.01, min(0.99, p1_win)))
+
+    # Apply Pinnacle logit blend (25% model / 75% Pinnacle).
+    # blend_with_pinnacle() returns model_prob unchanged when pinnacle_prob is None
+    # or degenerate — never produces a silent hardcoded fallback.
+    p1_win_blended = blend_with_pinnacle(
+        model_prob=p1_win_model,
+        pinnacle_prob=pinnacle_prob,
+    )
+    pinnacle_blend_applied = pinnacle_prob is not None and (0.001 < pinnacle_prob < 0.999)
+
+    p2_win = 1.0 - p1_win_blended
 
     model_version = f"r1_file_{r1_file_predictor.n_features}f"
 
     return {
-        "p1_win_prob": round(p1_win, 6),
+        "p1_win_prob": round(p1_win_blended, 6),
         "p2_win_prob": round(p2_win, 6),
+        "p1_win_prob_model_only": round(p1_win_model, 6),
+        "pinnacle_prob_used": round(pinnacle_prob, 6) if pinnacle_blend_applied else None,
+        "pinnacle_blend_applied": pinnacle_blend_applied,
         "model_version": model_version,
         "model_tier": "r1",
         "features_used": {
@@ -418,9 +457,66 @@ async def predict_match(req: DartsPredictRequest) -> JSONResponse:
         p2_3da=p2_3da, p2_3da_src=p2_3da_source,
     )
 
+    # --- Resolve Pinnacle devigged probability for logit blend ---
+    # Priority: (1) explicit request fields → (2) auto-fetch via Optic Odds REST API
+    # When no Pinnacle data is available, blend_with_pinnacle() returns model prob unchanged.
+    _pinnacle_prob: Optional[float] = None
+
+    if req.pinnacle_home_odds is not None and req.pinnacle_away_odds is not None:
+        # Explicit odds provided — devig immediately.
+        try:
+            fair_p1, _ = devig_2way(req.pinnacle_home_odds, req.pinnacle_away_odds)
+            _pinnacle_prob = fair_p1
+            log.info(
+                "darts_predict_pinnacle_explicit",
+                pinnacle_home_odds=req.pinnacle_home_odds,
+                pinnacle_away_odds=req.pinnacle_away_odds,
+                devigged_p1=round(_pinnacle_prob, 6),
+            )
+        except ValueError as _dv_err:
+            log.warning("darts_predict_pinnacle_devig_failed", error=str(_dv_err))
+
+    elif req.fixture_id:
+        # Auto-fetch Pinnacle odds from Optic Odds REST API when OPTIC_ODDS_API_KEY is set.
+        # Use fetch_pinnacle_odds() directly to obtain raw decimal odds, then devig them.
+        # This avoids any model_prob dependency in the fetch path.
+        import os as _os
+        _optic_key = _os.getenv("OPTIC_ODDS_API_KEY", "")
+        if _optic_key:
+            try:
+                _pin_raw = await fetch_pinnacle_odds(
+                    fixture_id=req.fixture_id,
+                    sport="darts",
+                    api_key=_optic_key,
+                    market_type="moneyline",
+                )
+                if (
+                    _pin_raw is not None
+                    and _pin_raw.get("home") is not None
+                    and _pin_raw.get("away") is not None
+                ):
+                    _auto_home = float(_pin_raw["home"])
+                    _auto_away = float(_pin_raw["away"])
+                    if _auto_home > 1.0 and _auto_away > 1.0:
+                        _fair_p1, _ = devig_2way(_auto_home, _auto_away)
+                        _pinnacle_prob = _fair_p1
+                        log.info(
+                            "darts_predict_pinnacle_auto_fetched",
+                            fixture_id=req.fixture_id,
+                            home_odds=_auto_home,
+                            away_odds=_auto_away,
+                            devigged_p1=round(_pinnacle_prob, 6),
+                        )
+            except Exception as _fetch_err:
+                log.warning(
+                    "darts_predict_pinnacle_auto_fetch_failed",
+                    fixture_id=req.fixture_id,
+                    error=str(_fetch_err),
+                )
+
     # --- Run inference: R1 primary, R0 fallback ---
     try:
-        result = _run_r1_inference(req, p1_elo, p2_elo, p1_3da, p2_3da)
+        result = _run_r1_inference(req, p1_elo, p2_elo, p1_3da, p2_3da, pinnacle_prob=_pinnacle_prob)
     except RuntimeError as r1_err:
         log.warning("r1_model_unavailable_trying_r0", error=str(r1_err))
         try:
