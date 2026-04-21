@@ -76,8 +76,8 @@ def _extract_player(fixture: dict, side: str) -> str:
 )
 async def darts_matches(
     status: str = Query(
-        default="not_started",
-        description="Fixture status filter: not_started | in_progress | all",
+        default="all",
+        description="Fixture status filter: unplayed | in_progress | all",
     ),
     page: int = Query(default=1, ge=1, le=50, description="Page number (1-based)"),
     limit: int = Query(default=50, ge=1, le=200, description="Results per page"),
