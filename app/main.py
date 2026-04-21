@@ -96,6 +96,7 @@ from app.routes import (
     h2h,
     liability,
     live,
+    matches,
     monitoring,
     outrights,
     players,
@@ -279,6 +280,7 @@ def create_app() -> FastAPI:
 
     # Routers
     api_prefix = "/api/v1/darts"
+    app.include_router(matches.router, prefix=api_prefix, tags=["Matches"])
     app.include_router(prematch.router, prefix=api_prefix, tags=["Pre-Match"])
     app.include_router(derivatives.router, prefix=api_prefix, tags=["Derivatives"])
     app.include_router(trading_controls.router, prefix=api_prefix, tags=["Trading Controls"])
