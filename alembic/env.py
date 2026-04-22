@@ -50,7 +50,12 @@ def do_run_migrations(connection):
 
 async def run_async_migrations() -> None:
     url = _get_url()
-    connectable = create_async_engine(url, echo=False)
+    # pgbouncer transaction-mode compatibility (Supabase pooler)
+    connectable = create_async_engine(
+        url,
+        echo=False,
+        connect_args={"statement_cache_size": 0},
+    )
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)
     await connectable.dispose()

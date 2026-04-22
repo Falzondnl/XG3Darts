@@ -52,6 +52,8 @@ def _build_engine() -> AsyncEngine:
             "connect_args": {
                 "timeout": 10,           # asyncpg TCP connect timeout (seconds)
                 "command_timeout": 30,   # per-query timeout
+                # pgbouncer transaction-mode compatibility (Supabase pooler)
+                "statement_cache_size": 0,
             },
         })
 
