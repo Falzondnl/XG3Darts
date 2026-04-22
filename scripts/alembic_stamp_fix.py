@@ -51,7 +51,11 @@ async def fix_stale_revisions() -> None:
         print(f"[stamp-fix] SQLAlchemy not available: {exc} — skipping.", flush=True)
         return
 
-    engine = create_async_engine(url, echo=False, connect_args={"timeout": 10})
+    engine = create_async_engine(
+        url,
+        echo=False,
+        connect_args={"timeout": 10, "statement_cache_size": 0},
+    )
     try:
         async with engine.begin() as conn:
             # Check whether alembic_version table exists
