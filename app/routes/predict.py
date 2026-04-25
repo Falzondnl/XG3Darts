@@ -398,10 +398,15 @@ async def predict_match(req: DartsPredictRequest) -> JSONResponse:
 
     Fallback: R0 logistic regression (14 features) if R1 pkl absent.
 
-    ELO and 3DA stats are looked up from the DB when not provided in the
-    request body. If unavailable from DB, the model's training-time neutral
-    defaults are used (ELO=1500, 3DA=50.0) — this degrades accuracy but
-    never produces hardcoded output.
+    ELO is looked up from darts_elo_ratings DB table. When no DB rating
+    exists and no explicit p1_elo/p2_elo override is in the request,
+    the endpoint returns HTTP 503 "darts_elo_unavailable" rather than
+    silently defaulting to ELO=1500.  Callers who supply p1_elo/p2_elo
+    in the request body bypass the DB and receive real predictions.
+
+    GAP-A-03 FIX (window_predict_a 2026-04-25): ELO-1500 silent fallback
+    eliminated. Platform refuses to publish synthetic prices — use explicit
+    ELO overrides or seed the darts_elo_ratings table.
 
     Returns 503 if no model file is available at all.
     """
@@ -414,24 +419,65 @@ async def predict_match(req: DartsPredictRequest) -> JSONResponse:
     log.info("darts_predict_request", ecosystem=req.ecosystem, format=req.format)
 
     # --- Resolve ELO ---
-    _DEFAULT_ELO = 1500.0
+    # GAP-A-03 FIX: refuse with 503 when ELO not in DB and not in request.
+    # This replaces the prior ELO=1500 silent fallback (FAKE DATA violation).
     if req.player1_elo is not None:
         p1_elo = req.player1_elo
         p1_elo_source = "request"
     else:
         db_elo = await _lookup_elo(req.player1)
-        p1_elo = db_elo if db_elo is not None else _DEFAULT_ELO
-        p1_elo_source = "db" if db_elo is not None else "default"
+        if db_elo is None:
+            log.warning("darts_elo_unavailable", player=req.player1)
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "error": "prediction_unavailable",
+                    "sport": "darts",
+                    "match_id": req.fixture_id or "unknown",
+                    "reason": "darts_elo_unavailable",
+                    "detail": (
+                        f"Player {req.player1!r} has no ELO rating in darts_elo_ratings. "
+                        "Provide player1_elo in the request body to override, "
+                        "or seed the darts_elo_ratings table."
+                    ),
+                    "last_known_good_at": None,
+                    "request_id": rid,
+                },
+                headers={"Retry-After": "3600"},
+            )
+        p1_elo = db_elo
+        p1_elo_source = "db"
 
     if req.player2_elo is not None:
         p2_elo = req.player2_elo
         p2_elo_source = "request"
     else:
         db_elo = await _lookup_elo(req.player2)
-        p2_elo = db_elo if db_elo is not None else _DEFAULT_ELO
-        p2_elo_source = "db" if db_elo is not None else "default"
+        if db_elo is None:
+            log.warning("darts_elo_unavailable", player=req.player2)
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "error": "prediction_unavailable",
+                    "sport": "darts",
+                    "match_id": req.fixture_id or "unknown",
+                    "reason": "darts_elo_unavailable",
+                    "detail": (
+                        f"Player {req.player2!r} has no ELO rating in darts_elo_ratings. "
+                        "Provide player2_elo in the request body to override, "
+                        "or seed the darts_elo_ratings table."
+                    ),
+                    "last_known_good_at": None,
+                    "request_id": rid,
+                },
+                headers={"Retry-After": "3600"},
+            )
+        p2_elo = db_elo
+        p2_elo_source = "db"
 
     # --- Resolve 3DA ---
+    # 3DA neutral default (50.0) is acceptable — it represents mid-tier professional
+    # performance and is less critical than ELO for prediction accuracy.
     _DEFAULT_3DA = 50.0
     if req.player1_3da is not None:
         p1_3da = req.player1_3da
@@ -439,7 +485,7 @@ async def predict_match(req: DartsPredictRequest) -> JSONResponse:
     else:
         db_3da = await _lookup_3da(req.player1)
         p1_3da = db_3da if db_3da is not None else _DEFAULT_3DA
-        p1_3da_source = "db" if db_3da is not None else "default"
+        p1_3da_source = "db" if db_3da is not None else "neutral_default"
 
     if req.player2_3da is not None:
         p2_3da = req.player2_3da
@@ -447,7 +493,7 @@ async def predict_match(req: DartsPredictRequest) -> JSONResponse:
     else:
         db_3da = await _lookup_3da(req.player2)
         p2_3da = db_3da if db_3da is not None else _DEFAULT_3DA
-        p2_3da_source = "db" if db_3da is not None else "default"
+        p2_3da_source = "db" if db_3da is not None else "neutral_default"
 
     log.info(
         "darts_predict_inputs_resolved",
