@@ -442,7 +442,31 @@ async def price_all_fixtures(
     for row in rows:
         p1_3da = float(row[8])
         p2_3da = float(row[9])
+        p1_elo_val = float(row[10])
+        p2_elo_val = float(row[11])
         round_name = row[1] or "Final"
+
+        # B3-FIX: Detect COALESCE 1500 ELO fallback — log structured warning so it's observable.
+        if p1_elo_val == 1500.0:
+            logger.warning(
+                "darts.events.elo_coalesce_fallback_1500",
+                player_id=row[2],
+                player_name=row[4],
+                pool="pdc_mens",
+                match_id=row[0],
+                reason="No darts_elo_ratings row found for player1 — COALESCE returned 1500.0",
+                operator_action="OPERATOR_ATTENTION: populate darts_elo_ratings for this player",
+            )
+        if p2_elo_val == 1500.0:
+            logger.warning(
+                "darts.events.elo_coalesce_fallback_1500",
+                player_id=row[3],
+                player_name=row[6],
+                pool="pdc_mens",
+                match_id=row[0],
+                reason="No darts_elo_ratings row found for player2 — COALESCE returned 1500.0",
+                operator_action="OPERATOR_ATTENTION: populate darts_elo_ratings for this player",
+            )
 
         try:
             fmt = get_format(event["code"], round_name)

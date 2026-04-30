@@ -1085,6 +1085,15 @@ async def smart_price(
             p1_country = p1_row[8] or ""
             p1_nick = p1_row[6] or ""
             p1_name_db = p1_nick or f"{p1_row[4] or ''} {p1_row[5] or ''}".strip() or None
+            # B3-FIX: Detect COALESCE 1500 fallback — darts_elo_ratings row missing for player
+            if p1_elo == 1500.0:
+                logger.warning(
+                    "darts.prematch.elo_coalesce_fallback_1500",
+                    player_id=request.p1_id,
+                    pool="pdc_mens",
+                    reason="No darts_elo_ratings row found — COALESCE returned 1500.0",
+                    operator_action="OPERATOR_ATTENTION: populate darts_elo_ratings for this player",
+                )
         else:
             src_conf_p1 = 0.85
 
@@ -1097,6 +1106,15 @@ async def smart_price(
             p2_country = p2_row[8] or ""
             p2_nick = p2_row[6] or ""
             p2_name_db = p2_nick or f"{p2_row[4] or ''} {p2_row[5] or ''}".strip() or None
+            # B3-FIX: Detect COALESCE 1500 fallback — darts_elo_ratings row missing for player
+            if p2_elo == 1500.0:
+                logger.warning(
+                    "darts.prematch.elo_coalesce_fallback_1500",
+                    player_id=request.p2_id,
+                    pool="pdc_mens",
+                    reason="No darts_elo_ratings row found — COALESCE returned 1500.0",
+                    operator_action="OPERATOR_ATTENTION: populate darts_elo_ratings for this player",
+                )
         else:
             src_conf_p2 = 0.85
 

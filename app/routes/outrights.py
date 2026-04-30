@@ -730,6 +730,29 @@ async def quick_outright_price(
 
     format_code, field_data = field_map[competition_id]
 
+    # B3-FIX: Log OPERATOR_ATTENTION warning — static field lists should be replaced
+    # by DB-backed ELO queries once darts_elo_ratings is fully populated.
+    # Players at bottom of the PDC ladder may show 1500.0 as their floor estimate.
+    _players_at_floor = [p["player_id"] for p in field_data if p["elo_rating"] <= 1500.0]
+    if _players_at_floor:
+        logger.warning(
+            "darts.outrights.static_field_elo_floor",
+            competition_id=competition_id,
+            players_at_or_below_1500=_players_at_floor,
+            count=len(_players_at_floor),
+            operator_action=(
+                "OPERATOR_ATTENTION: These players have ELO <= 1500.0 in the static field. "
+                "Populate darts_elo_ratings table and replace static field with DB lookup."
+            ),
+        )
+    else:
+        logger.info(
+            "darts.outrights.static_field_used",
+            competition_id=competition_id,
+            n_players=len(field_data),
+            note="Static field in use — wire to DB when darts_elo_ratings is populated.",
+        )
+
     # Check cache first
     cache_key = f"{competition_id}_quick_{n_simulations}"
     if cache_key in _result_cache:
