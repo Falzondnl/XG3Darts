@@ -61,6 +61,8 @@ CRITICAL_MODULES: list[str] = [
     "app/routes/liability.py",
     "app/routes/feeds.py",
     "app/routes/monitoring.py",
+    # Alembic isolation lock (DARTS-TABLES-MIGRATION-NEEDED fix 2026-04-30)
+    "alembic/env.py",
 ]
 
 FIXED_BUGS: list[str] = [
@@ -68,6 +70,15 @@ FIXED_BUGS: list[str] = [
     "LivePriceResponse and LiveMarketsResponse in app/routes/live.py — "
     "sprint 44 live-blend assessment: darts live pricing uses visit-state "
     "Markov chain without Pinnacle logit-space blend.",
+    "DARTS-TABLES-MIGRATION-NEEDED: alembic/env.py now sets "
+    "version_table='alembic_version_darts' in both run_migrations_offline() and "
+    "do_run_migrations() — prevents collision with gateway's alembic_version table "
+    "on the shared Supabase DB. All 13 darts tables (darts_competitions, "
+    "darts_matches, darts_legs, darts_visits, darts_player_stats, "
+    "darts_coverage_regimes, darts_elo_ratings, darts_gdpr_consents, "
+    "darts_ml_model_artifacts, darts_liability_limits, darts_bet_exposure, "
+    "darts_trader_overrides + existing darts_players) created in production and "
+    "alembic_version_darts stamped at revision 004. Fix applied 2026-04-30.",
 ]
 
 

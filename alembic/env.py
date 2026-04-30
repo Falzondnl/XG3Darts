@@ -37,13 +37,22 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        # Isolated version table — prevents collision with gateway's alembic_version
+        # on the shared Supabase database (DARTS-TABLES-MIGRATION-NEEDED fix 2026-04-30)
+        version_table="alembic_version_darts",
     )
     with context.begin_transaction():
         context.run_migrations()
 
 
 def do_run_migrations(connection):
-    context.configure(connection=connection, target_metadata=target_metadata)
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        # Isolated version table — prevents collision with gateway's alembic_version
+        # on the shared Supabase database (DARTS-TABLES-MIGRATION-NEEDED fix 2026-04-30)
+        version_table="alembic_version_darts",
+    )
     with context.begin_transaction():
         context.run_migrations()
 

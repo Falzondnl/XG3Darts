@@ -1,8 +1,9 @@
 {
-  "locked_at": "2026-04-13T06:37:31.488805+00:00",
+  "locked_at": "2026-04-30T00:00:00.000000+00:00",
   "project_root": "E:\\DF\\XG3V10\\darts\\XG3Darts",
   "fixed_bugs": [
-    "DARTS-LIVE-AUTH-001: pricing_authority='live_model_only' added to LivePriceResponse and LiveMarketsResponse in app/routes/live.py \u2014 sprint 44 live-blend assessment: darts live pricing uses visit-state Markov chain without Pinnacle logit-space blend."
+    "DARTS-LIVE-AUTH-001: pricing_authority='live_model_only' added to LivePriceResponse and LiveMarketsResponse in app/routes/live.py \u2014 sprint 44 live-blend assessment: darts live pricing uses visit-state Markov chain without Pinnacle logit-space blend.",
+    "DARTS-TABLES-MIGRATION-NEEDED: alembic/env.py now sets version_table='alembic_version_darts' in both run_migrations_offline() and do_run_migrations() \u2014 prevents collision with gateway's alembic_version table on shared Supabase DB. All 13 darts tables created in production and alembic_version_darts stamped at revision 004. Fix applied 2026-04-30."
   ],
   "checksums": {
     "engines/state_layer/score_state.py": "fd3ea00362682a4de58cee9f0a0b7cefe17315119ca595bdfb5bfdffe5daf310",
@@ -36,6 +37,7 @@
     "app/routes/trader.py": "a346a817c2191297e9efa51c11b4e52b89e08123c2b6af75a1453ffc1996f711",
     "app/routes/liability.py": "3ec44fc6cbd68333f66863bd4b41d903ae0ee4015b05a52c024a0f9dc1353513",
     "app/routes/feeds.py": "3cb4162f75d958d6f7498a3c67db96aa2bf060e87be502c8fbafe3b713a9364f",
-    "app/routes/monitoring.py": "46ded0b5019d8174319edc103ddc3bc263a38588e7f2993900e5454c473b0db6"
+    "app/routes/monitoring.py": "46ded0b5019d8174319edc103ddc3bc263a38588e7f2993900e5454c473b0db6",
+    "alembic/env.py": "23b01b43304d7a34a9e0c1a322b3b9438d2794cfdc916833af4cce4cdb9c7a2d"
   }
 }
