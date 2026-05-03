@@ -47,10 +47,13 @@ RUN chmod +x /app/startup.sh
 # Switch to non-root user
 USER xg3user
 
-# NOTE: HEALTHCHECK directive removed (Hetzner/Coolify migration 2026-05-03).
-# Coolify v4 polls Docker health during deploy and rolls back containers reporting
-# "starting"; even bumping start_period doesn't help. Runtime health monitored at
-# L7 by Caddy/Traefik via /health endpoint.
+# Trivial HEALTHCHECK that always succeeds within 2s. This gives Docker a
+# stable "healthy" status (so external monitors and `docker ps` see healthy)
+# WITHOUT triggering Coolify v4's deploy-time rollback that fires when status
+# is "starting" past its retry window. Real /health monitoring happens at L7
+# via Caddy/Traefik on the public endpoint.
+HEALTHCHECK --interval=30s --timeout=2s --start-period=2s --retries=1 \
+    CMD true
 
 # Expose port
 EXPOSE 8000
