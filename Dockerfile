@@ -47,9 +47,10 @@ RUN chmod +x /app/startup.sh
 # Switch to non-root user
 USER xg3user
 
-# Health check — longer start-period to allow migration time
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
+# NOTE: HEALTHCHECK directive removed (Hetzner/Coolify migration 2026-05-03).
+# Coolify v4 polls Docker health during deploy and rolls back containers reporting
+# "starting"; even bumping start_period doesn't help. Runtime health monitored at
+# L7 by Caddy/Traefik via /health endpoint.
 
 # Expose port
 EXPOSE 8000
