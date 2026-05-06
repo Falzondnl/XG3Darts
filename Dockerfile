@@ -52,8 +52,8 @@ USER xg3user
 # WITHOUT triggering Coolify v4's deploy-time rollback that fires when status
 # is "starting" past its retry window. Real /health monitoring happens at L7
 # via Caddy/Traefik on the public endpoint.
-HEALTHCHECK --interval=30s --timeout=2s --start-period=2s --retries=1 \
-    CMD true
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD python -c "import urllib.request,sys;r=urllib.request.urlopen('http://localhost:${PORT:-8000}/health/live',timeout=4);sys.exit(0 if r.status==200 else 1)"
 
 # Expose port
 EXPOSE 8000
