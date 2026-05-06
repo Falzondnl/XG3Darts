@@ -45,7 +45,57 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
+SPORT_VERSION_TABLE = "alembic_version_darts"
+
+
+def _bootstrap_version_table_if_needed(connection) -> None:
+    """If the per-sport version_table is empty but our tables already exist
+    (post-cutover state), stamp the table with script-directory HEAD revision
+    to avoid DuplicateTableError on first deploy. Idempotent."""
+    from sqlalchemy import text
+    from alembic.script import ScriptDirectory
+
+    connection.execute(
+        text(
+            f"CREATE TABLE IF NOT EXISTS {SPORT_VERSION_TABLE} "
+            f"(version_num VARCHAR(32) NOT NULL, "
+            f"CONSTRAINT {SPORT_VERSION_TABLE}_pkc PRIMARY KEY (version_num))"
+        )
+    )
+
+    row = connection.execute(text(f"SELECT version_num FROM {SPORT_VERSION_TABLE} LIMIT 1")).first()
+    if row is not None:
+        return
+
+    sample_tables: list = []
+    md_list = target_metadata if isinstance(target_metadata, list) else [target_metadata]
+    for md in md_list:
+        if md is not None:
+            sample_tables.extend(md.tables.keys())
+    if not sample_tables:
+        return
+
+    existing = connection.execute(
+        text(
+            "SELECT 1 FROM information_schema.tables "
+            "WHERE table_schema='public' AND table_name = ANY(:names) LIMIT 1"
+        ),
+        {"names": sample_tables},
+    ).first()
+    if existing is None:
+        return
+
+    script = ScriptDirectory.from_config(context.config)
+    head = script.get_current_head()
+    if head:
+        connection.execute(
+            text(f"INSERT INTO {SPORT_VERSION_TABLE} (version_num) VALUES (:v)"),
+            {"v": head},
+        )
+
+
 def do_run_migrations(connection):
+    _bootstrap_version_table_if_needed(connection)
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
