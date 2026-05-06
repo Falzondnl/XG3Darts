@@ -62,6 +62,7 @@ def _bootstrap_version_table_if_needed(connection) -> None:
             f"CONSTRAINT {SPORT_VERSION_TABLE}_pkc PRIMARY KEY (version_num))"
         )
     )
+    connection.commit()  # MUST commit; SQLAlchemy 2.0 implicit txn rolls back otherwise
 
     row = connection.execute(text(f"SELECT version_num FROM {SPORT_VERSION_TABLE} LIMIT 1")).first()
     if row is not None:
@@ -92,6 +93,7 @@ def _bootstrap_version_table_if_needed(connection) -> None:
             text(f"INSERT INTO {SPORT_VERSION_TABLE} (version_num) VALUES (:v)"),
             {"v": head},
         )
+        connection.commit()  # MUST commit; SQLAlchemy 2.0 implicit txn rolls back otherwise
 
 
 def do_run_migrations(connection):
