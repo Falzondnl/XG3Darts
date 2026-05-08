@@ -193,6 +193,16 @@ async def lifespan(app: FastAPI):
             hint="Pre-match endpoints remain available; live pricing degraded",
         )
 
+    # Warm up R1 model to eliminate 2s cold-start on first customer prediction.
+    # Thread-pool init inside sklearn LightGBM wrapper only fires on first
+    # predict_proba call — absorb the cost here, not on a live request.
+    try:
+        from models.r1_file_predictor import r1_file_predictor
+        import asyncio
+        await asyncio.get_event_loop().run_in_executor(None, r1_file_predictor.warmup)
+    except Exception as _warmup_exc:
+        logger.warning("r1_warmup_failed", error=str(_warmup_exc))
+
     yield
 
     # Shutdown: stop the worker gracefully

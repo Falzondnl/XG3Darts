@@ -394,5 +394,27 @@ class R1FilePredictor:
         return p1_win
 
 
+    def warmup(self) -> None:
+        """Run a dummy prediction at startup to eliminate first-request 2s cold-start.
+
+        LightGBM + sklearn initialize their thread pools on the first predict_proba
+        call. Calling this once during the lifespan means the real first customer
+        prediction pays no warmup cost.
+        """
+        try:
+            result = self.predict(
+                p1_elo=_DEFAULT_ELO,
+                p2_elo=_DEFAULT_ELO,
+                p1_3da=_DEFAULT_3DA,
+                p2_3da=_DEFAULT_3DA,
+            )
+            if result is not None:
+                self._log.info("r1_model_warmed_up", dummy_prob=round(result, 4))
+            else:
+                self._log.warning("r1_warmup_skipped_no_model")
+        except Exception as exc:
+            self._log.warning("r1_warmup_error", error=str(exc))
+
+
 # Module-level singleton
 r1_file_predictor = R1FilePredictor()
