@@ -194,10 +194,15 @@ async def _lookup_elo(player_name: str) -> Optional[float]:
 
 async def _lookup_3da(player_name: str) -> Optional[float]:
     """
-    Look up a player's most recent three-dart average from the DB.
+    Look up a player's PDC three-dart average from the DB.
 
-    Queries darts_player_stats by player_name.
-    Returns None if not found.
+    Queries darts_player_stats by player_name using the three_da_pdc column
+    added in migration 005.  Returns None if the player is not found so the
+    caller can distinguish "not seeded" from a real zero average.
+
+    Column notes:
+      - darts_player_stats.player_name  — added in migration 005
+      - darts_player_stats.three_da_pdc — added in migration 005 (PDC season avg)
     """
     try:
         from db.session import engine
@@ -208,6 +213,7 @@ async def _lookup_3da(player_name: str) -> Optional[float]:
                 text(
                     "SELECT three_da_pdc FROM darts_player_stats "
                     "WHERE LOWER(player_name) = LOWER(:name) "
+                    "AND three_da_pdc IS NOT NULL "
                     "ORDER BY updated_at DESC LIMIT 1"
                 ),
                 {"name": player_name},
