@@ -104,7 +104,8 @@ async def darts_matches(
         "limit": limit,
     }
     if status and status != "all":
-        params["status"] = status
+        # OpticOdds v3 rejects "upcoming" — normalize to valid value
+        params["status"] = "unplayed" if status == "upcoming" else status
 
     log.info("darts_matches_fetch", params=str(params))
 
