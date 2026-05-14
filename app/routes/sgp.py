@@ -197,7 +197,16 @@ async def price_sgp(request: SGPPriceRequest) -> dict[str, Any]:
         )
 
     bookmaker_prob = min(1.0, true_prob * (1.0 + margin))
-    decimal_odds = round(1.0 / bookmaker_prob, 2) if bookmaker_prob > 0 else None
+    # FIX-ODDS-FLOOR-001 (2026-05-14): clamp to 1.01 minimum before returning
+    _raw_decimal = round(1.0 / bookmaker_prob, 2) if bookmaker_prob > 0 else None
+    if _raw_decimal is not None and _raw_decimal < 1.01:
+        logger.warning(
+            "ODDS_FLOOR_TRIGGERED sport=darts context=sgp_price "
+            "original_offered=%.4f clamped_to=1.01 — model confidence extreme",
+            _raw_decimal,
+        )
+        _raw_decimal = 1.01
+    decimal_odds = _raw_decimal
 
     # Naive (independent) parlay for comparison
     naive_prob = 1.0
