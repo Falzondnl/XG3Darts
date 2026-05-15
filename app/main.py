@@ -203,6 +203,35 @@ async def lifespan(app: FastAPI):
     except Exception as _warmup_exc:
         logger.warning("r1_warmup_failed", error=str(_warmup_exc))
 
+    # LOCK-DARTS-MARKET-CAL-REGISTRY-DOCUMENTED-001
+    # Market-family calibrators are built in calibration/market_calibrators.py
+    # (MarketCalibrationRegistry, 7 Beta calibrators) but no .pkl files have been
+    # trained yet — calibration/market_calibrators.py:193 shows is_fitted() returns
+    # False for all families. Until these calibrators are trained on R1 holdout
+    # predictions and saved to models/saved/calibration/, R1 probabilities pass through
+    # Shin margin WITHOUT Beta calibration. This is a known gap documented in
+    # PLATFORM_INVENTORY.json (darts calibrators: is_fitted=False).
+    # ACTION REQUIRED: Run scripts/train_market_calibrators.py against R1 holdout
+    # predictions to produce the 7 calibrator .pkl files.
+    try:
+        from calibration.market_calibrators import MarketCalibrationRegistry
+        _cal_registry = MarketCalibrationRegistry()
+        if not _cal_registry.all_fitted():
+            _unfitted = [f for f, c in _cal_registry._calibrators.items() if not c.fitted_]
+            logger.warning(
+                "DARTS_MARKET_CALIBRATORS_PENDING",
+                unfitted_families=_unfitted,
+                total_families=len(_cal_registry),
+                impact=(
+                    "R1 probabilities are NOT Beta-calibrated. "
+                    "Shin margin is applied to raw GBM stacking output. "
+                    "Train calibrators via scripts/train_market_calibrators.py."
+                ),
+                known_gap="PLATFORM_INVENTORY.json darts.calibrators.is_fitted=False",
+            )
+    except Exception as _cal_exc:
+        logger.warning("darts_calibrator_registry_check_failed", error=str(_cal_exc))
+
     yield
 
     # Shutdown: stop the worker gracefully

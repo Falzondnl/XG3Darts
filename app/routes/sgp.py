@@ -225,6 +225,7 @@ async def price_sgp(request: SGPPriceRequest) -> dict[str, Any]:
     )
 
     return {
+        "prediction_source": "model",
         "match_id": request.match_id,
         "competition_code": request.competition_code,
         "n_legs": len(request.legs),

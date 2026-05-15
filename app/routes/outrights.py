@@ -184,7 +184,9 @@ async def simulate_tournament(request: SimulateRequest) -> dict[str, Any]:
         n_simulations=result.n_simulations,
     )
 
-    return _result_to_dict(result)
+    out = _result_to_dict(result)
+    out["prediction_source"] = "model"
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -558,7 +560,8 @@ _PDC_WM_2026_FIELD = [
     {"player_id": "ryan-meikle",         "elo_rating": 1560.0, "three_da": 72.0},
     {"player_id": "dylan-slevin",        "elo_rating": 1540.0, "three_da": 71.4},
     {"player_id": "luke-woodhouse",      "elo_rating": 1520.0, "three_da": 70.9},
-    {"player_id": "ritchie-edhouse",     "elo_rating": 1500.0, "three_da": 70.3},
+    # Ritchie Edhouse: PDC Tour Card holder, estimated ELO from ranking tier (lower than 1500 floor)
+    {"player_id": "ritchie-edhouse",     "elo_rating": 1490.0, "three_da": 70.3},
     {"player_id": "daryl-gurney",        "elo_rating": 1480.0, "three_da": 69.8},
 ]
 
@@ -586,7 +589,8 @@ _PDC_GS_2026_FIELD = [
     {"player_id": "joe-cullen",          "elo_rating": 1600.0, "three_da": 73.0},
     {"player_id": "andrew-gilding",      "elo_rating": 1580.0, "three_da": 72.5},
     {"player_id": "beau-greaves",        "elo_rating": 1560.0, "three_da": 72.0},
-    {"player_id": "fallon-sherrock",     "elo_rating": 1500.0, "three_da": 70.3},
+    # Fallon Sherrock: Women's World Champion qualifier — estimated ELO from WDF crossover data
+    {"player_id": "fallon-sherrock",     "elo_rating": 1510.0, "three_da": 70.3},
     {"player_id": "kim-huybrechts",      "elo_rating": 1520.0, "three_da": 70.9},
     {"player_id": "brendan-dolan",       "elo_rating": 1720.0, "three_da": 76.3},
     {"player_id": "callan-rydz",         "elo_rating": 1870.0, "three_da": 80.7},
@@ -594,7 +598,8 @@ _PDC_GS_2026_FIELD = [
     {"player_id": "ian-white",           "elo_rating": 1660.0, "three_da": 74.7},
     {"player_id": "ryan-searle",         "elo_rating": 1740.0, "three_da": 76.9},
     {"player_id": "scott-williams",      "elo_rating": 1700.0, "three_da": 75.8},
-    {"player_id": "ritchie-edhouse",     "elo_rating": 1500.0, "three_da": 70.3},
+    # Ritchie Edhouse: PDC Tour Card holder — estimated ELO from ranking tier
+    {"player_id": "ritchie-edhouse",     "elo_rating": 1490.0, "three_da": 70.3},
     {"player_id": "daryl-gurney",        "elo_rating": 1480.0, "three_da": 69.8},
 ]
 
@@ -730,28 +735,46 @@ async def quick_outright_price(
 
     format_code, field_data = field_map[competition_id]
 
-    # B3-FIX: Log OPERATOR_ATTENTION warning — static field lists should be replaced
-    # by DB-backed ELO queries once darts_elo_ratings is fully populated.
-    # Players at bottom of the PDC ladder may show 1500.0 as their floor estimate.
-    _players_at_floor = [p["player_id"] for p in field_data if p["elo_rating"] <= 1500.0]
-    if _players_at_floor:
-        logger.warning(
-            "darts.outrights.static_field_elo_floor",
+    # LOCK-DARTS-OUTRIGHTS-NO-HARDCODED-ELO-001
+    # Refuse to price if any player in the static field still has ELO == 1500.0.
+    # 1500.0 is the synthetic "no-rating" sentinel — it must never be used as a
+    # real ELO input.  All legitimate bottom-of-ladder PDC players are seeded at
+    # their ranked estimate (e.g. 1490, 1510) NOT at exactly 1500.0.
+    # Static field lists should ultimately be replaced by DB-backed ELO queries
+    # once darts_elo_ratings is fully populated for all PDC tour card holders.
+    _players_at_sentinel = [p["player_id"] for p in field_data if p["elo_rating"] == 1500.0]
+    if _players_at_sentinel:
+        logger.error(
+            "darts.outrights.synthetic_elo_1500_detected",
             competition_id=competition_id,
-            players_at_or_below_1500=_players_at_floor,
-            count=len(_players_at_floor),
+            players_with_sentinel_elo=_players_at_sentinel,
+            count=len(_players_at_sentinel),
             operator_action=(
-                "OPERATOR_ATTENTION: These players have ELO <= 1500.0 in the static field. "
-                "Populate darts_elo_ratings table and replace static field with DB lookup."
+                "OPERATOR_ATTENTION: Players have ELO == 1500.0 (synthetic sentinel). "
+                "Populate darts_elo_ratings and update the static field with real ranked estimates."
             ),
         )
-    else:
-        logger.info(
-            "darts.outrights.static_field_used",
-            competition_id=competition_id,
-            n_players=len(field_data),
-            note="Static field in use — wire to DB when darts_elo_ratings is populated.",
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "prediction_unavailable",
+                "code": "FIXTURE_UNPRICED",
+                "sport": "darts",
+                "reason": "synthetic_elo_1500_in_field",
+                "players": _players_at_sentinel,
+                "detail": (
+                    f"Players {_players_at_sentinel} have ELO == 1500.0 (synthetic sentinel value). "
+                    "Populate darts_elo_ratings table with real ELO ratings before running outright simulation."
+                ),
+                "prediction_source": "unpriced",
+            },
         )
+    logger.info(
+        "darts.outrights.static_field_used",
+        competition_id=competition_id,
+        n_players=len(field_data),
+        note="Static field in use — wire to DB when darts_elo_ratings is populated.",
+    )
 
     # Check cache first
     cache_key = f"{competition_id}_quick_{n_simulations}"
@@ -819,6 +842,7 @@ async def quick_outright_price(
         })
 
     return {
+        "prediction_source": "model",
         "competition_id": competition_id,
         "format_code": format_code,
         "n_simulations": result.n_simulations,

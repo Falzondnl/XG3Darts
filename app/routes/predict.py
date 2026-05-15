@@ -305,6 +305,7 @@ def _run_r1_inference(
     model_version = f"r1_file_{r1_file_predictor.n_features}f"
 
     return {
+        "prediction_source": "model",
         "p1_win_prob": round(p1_win_blended, 6),
         "p2_win_prob": round(p2_win, 6),
         "p1_win_prob_model_only": round(p1_win_model, 6),
@@ -373,6 +374,7 @@ def _run_r0_inference(req: DartsPredictRequest, p1_elo: float, p2_elo: float) ->
     p1_win = max(0.01, min(0.99, p1_win))
 
     return {
+        "prediction_source": "model",
         "p1_win_prob": round(p1_win, 6),
         "p2_win_prob": round(1.0 - p1_win, 6),
         "model_version": "r0_logit_14f",
@@ -426,7 +428,9 @@ async def predict_match(req: DartsPredictRequest) -> JSONResponse:
 
     # --- Resolve ELO ---
     # GAP-A-03 FIX: refuse with 503 when ELO not in DB and not in request.
-    # This replaces the prior ELO=1500 silent fallback (FAKE DATA violation).
+    # DART-P0-2 FIX: Before emitting the 503, attempt Tier-2 Pinnacle market-scrape
+    # fallback so that fixtures with Pinnacle odds still get priced even when the
+    # model / ELO layer is unavailable (CLAUDE.md Tier-2 Universal Pricing Fallback).
     if req.player1_elo is not None:
         p1_elo = req.player1_elo
         p1_elo_source = "request"
@@ -434,22 +438,87 @@ async def predict_match(req: DartsPredictRequest) -> JSONResponse:
         db_elo = await _lookup_elo(req.player1)
         if db_elo is None:
             log.warning("darts_elo_unavailable", player=req.player1)
+            # --- TIER-2 CASCADE: try Pinnacle before returning 503 ---
+            _t2_pinnacle_prob: Optional[float] = None
+            if req.pinnacle_home_odds is not None and req.pinnacle_away_odds is not None:
+                try:
+                    _t2_fair_p1, _ = devig_2way(req.pinnacle_home_odds, req.pinnacle_away_odds)
+                    _t2_pinnacle_prob = _t2_fair_p1
+                except ValueError:
+                    pass
+            elif req.fixture_id:
+                import os as _os2
+                _t2_optic_key = _os2.getenv("OPTIC_ODDS_API_KEY", "")
+                if _t2_optic_key:
+                    try:
+                        _t2_raw = await fetch_pinnacle_odds(
+                            fixture_id=req.fixture_id,
+                            sport="darts",
+                            api_key=_t2_optic_key,
+                            market_type="moneyline",
+                        )
+                        if (
+                            _t2_raw is not None
+                            and _t2_raw.get("home") is not None
+                            and _t2_raw.get("away") is not None
+                        ):
+                            _t2h = float(_t2_raw["home"])
+                            _t2a = float(_t2_raw["away"])
+                            if _t2h > 1.0 and _t2a > 1.0:
+                                _t2_fair_p1, _ = devig_2way(_t2h, _t2a)
+                                _t2_pinnacle_prob = _t2_fair_p1
+                    except Exception as _t2_err:
+                        log.warning("darts_tier2_pinnacle_fetch_failed", error=str(_t2_err))
+
+            if _t2_pinnacle_prob is not None:
+                log.info(
+                    "darts_tier2_market_scrape_activated",
+                    fixture_id=req.fixture_id or "unknown",
+                    pinnacle_p1=round(_t2_pinnacle_prob, 6),
+                    missing_elo_player=req.player1,
+                )
+                _t2_result = {
+                    "prediction_source": "market_scrape",
+                    "model_available": False,
+                    "p1_win_prob": round(_t2_pinnacle_prob, 6),
+                    "p2_win_prob": round(1.0 - _t2_pinnacle_prob, 6),
+                    "pinnacle_prob_used": round(_t2_pinnacle_prob, 6),
+                    "pinnacle_blend_applied": True,
+                    "tier": 2,
+                    "tier2_reason": "elo_unavailable_pinnacle_fallback",
+                    "player1": req.player1,
+                    "player2": req.player2,
+                    "data_sources": {
+                        "p1_elo_source": "unavailable",
+                        "p2_elo_source": "unavailable",
+                        "pinnacle": "market_scrape",
+                    },
+                }
+                return JSONResponse(
+                    content=_ok(_t2_result, rid),
+                    status_code=status.HTTP_200_OK,
+                )
+
+            # No Pinnacle available either — TIER-3: structured refuse
             return JSONResponse(
                 status_code=503,
                 content={
                     "error": "prediction_unavailable",
+                    "code": "FIXTURE_UNPRICED",
                     "sport": "darts",
                     "match_id": req.fixture_id or "unknown",
-                    "reason": "darts_elo_unavailable",
+                    "reason": "no_elo_no_pinnacle",
                     "detail": (
-                        f"Player {req.player1!r} has no ELO rating in darts_elo_ratings. "
-                        "Provide player1_elo in the request body to override, "
-                        "or seed the darts_elo_ratings table."
+                        f"Player {req.player1!r} has no ELO rating in darts_elo_ratings "
+                        "and no Pinnacle market data is available for Tier-2 fallback. "
+                        "Provide player1_elo in the request body, seed darts_elo_ratings, "
+                        "or supply pinnacle_home_odds/pinnacle_away_odds."
                     ),
                     "last_known_good_at": None,
                     "request_id": rid,
+                    "prediction_source": "unpriced",
                 },
-                headers={"Retry-After": "3600"},
+                headers={"Retry-After": "30"},
             )
         p1_elo = db_elo
         p1_elo_source = "db"
@@ -461,22 +530,86 @@ async def predict_match(req: DartsPredictRequest) -> JSONResponse:
         db_elo = await _lookup_elo(req.player2)
         if db_elo is None:
             log.warning("darts_elo_unavailable", player=req.player2)
+            # --- TIER-2 CASCADE: same pattern for player2 ---
+            _t2b_pinnacle_prob: Optional[float] = None
+            if req.pinnacle_home_odds is not None and req.pinnacle_away_odds is not None:
+                try:
+                    _t2b_fair_p1, _ = devig_2way(req.pinnacle_home_odds, req.pinnacle_away_odds)
+                    _t2b_pinnacle_prob = _t2b_fair_p1
+                except ValueError:
+                    pass
+            elif req.fixture_id:
+                import os as _os3
+                _t2b_optic_key = _os3.getenv("OPTIC_ODDS_API_KEY", "")
+                if _t2b_optic_key:
+                    try:
+                        _t2b_raw = await fetch_pinnacle_odds(
+                            fixture_id=req.fixture_id,
+                            sport="darts",
+                            api_key=_t2b_optic_key,
+                            market_type="moneyline",
+                        )
+                        if (
+                            _t2b_raw is not None
+                            and _t2b_raw.get("home") is not None
+                            and _t2b_raw.get("away") is not None
+                        ):
+                            _t2bh = float(_t2b_raw["home"])
+                            _t2ba = float(_t2b_raw["away"])
+                            if _t2bh > 1.0 and _t2ba > 1.0:
+                                _t2b_fair_p1, _ = devig_2way(_t2bh, _t2ba)
+                                _t2b_pinnacle_prob = _t2b_fair_p1
+                    except Exception as _t2b_err:
+                        log.warning("darts_tier2_pinnacle_fetch_failed_p2", error=str(_t2b_err))
+
+            if _t2b_pinnacle_prob is not None:
+                log.info(
+                    "darts_tier2_market_scrape_activated",
+                    fixture_id=req.fixture_id or "unknown",
+                    pinnacle_p1=round(_t2b_pinnacle_prob, 6),
+                    missing_elo_player=req.player2,
+                )
+                _t2b_result = {
+                    "prediction_source": "market_scrape",
+                    "model_available": False,
+                    "p1_win_prob": round(_t2b_pinnacle_prob, 6),
+                    "p2_win_prob": round(1.0 - _t2b_pinnacle_prob, 6),
+                    "pinnacle_prob_used": round(_t2b_pinnacle_prob, 6),
+                    "pinnacle_blend_applied": True,
+                    "tier": 2,
+                    "tier2_reason": "elo_unavailable_pinnacle_fallback",
+                    "player1": req.player1,
+                    "player2": req.player2,
+                    "data_sources": {
+                        "p1_elo_source": "unavailable",
+                        "p2_elo_source": "unavailable",
+                        "pinnacle": "market_scrape",
+                    },
+                }
+                return JSONResponse(
+                    content=_ok(_t2b_result, rid),
+                    status_code=status.HTTP_200_OK,
+                )
+
             return JSONResponse(
                 status_code=503,
                 content={
                     "error": "prediction_unavailable",
+                    "code": "FIXTURE_UNPRICED",
                     "sport": "darts",
                     "match_id": req.fixture_id or "unknown",
-                    "reason": "darts_elo_unavailable",
+                    "reason": "no_elo_no_pinnacle",
                     "detail": (
-                        f"Player {req.player2!r} has no ELO rating in darts_elo_ratings. "
-                        "Provide player2_elo in the request body to override, "
-                        "or seed the darts_elo_ratings table."
+                        f"Player {req.player2!r} has no ELO rating in darts_elo_ratings "
+                        "and no Pinnacle market data is available for Tier-2 fallback. "
+                        "Provide player2_elo in the request body, seed darts_elo_ratings, "
+                        "or supply pinnacle_home_odds/pinnacle_away_odds."
                     ),
                     "last_known_good_at": None,
                     "request_id": rid,
+                    "prediction_source": "unpriced",
                 },
-                headers={"Retry-After": "3600"},
+                headers={"Retry-After": "30"},
             )
         p2_elo = db_elo
         p2_elo_source = "db"

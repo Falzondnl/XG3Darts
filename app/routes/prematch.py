@@ -340,6 +340,7 @@ async def price_match_winner(request: MatchPriceRequest) -> dict[str, Any]:
     )
 
     return {
+        "prediction_source": "model",
         "competition_code": request.competition_code,
         "round_name": request.round_name,
         "p1_id": request.p1_id,
@@ -1038,12 +1039,17 @@ async def smart_price(
     """
     from sqlalchemy import text as sql_text
 
-    # Fetch both players from DB; fall back to request-supplied values if DB unavailable
+    # Fetch both players from DB; fall back to request-supplied values if DB unavailable.
+    # DART-P0-4 FIX: ELO initialised to None, not 1500.0.  After the DB query, if
+    # either player's ELO is still None (or was COALESCE-defaulted to 1500 with no real
+    # darts_elo_ratings row) the route refuses to price rather than silently using a
+    # synthetic 1500 rating.  This matches the bet365-grade behaviour already enforced
+    # in /predict (predict.py GAP-A-03).
     _db_error: Optional[str] = None
     p1_three_da: float = request.fallback_3da
     p2_three_da: float = request.fallback_3da
-    p1_elo: float = 1500.0
-    p2_elo: float = 1500.0
+    p1_elo: Optional[float] = None
+    p2_elo: Optional[float] = None
     src_conf: float = 0.85
     p1_rank: float = 200.0
     p2_rank: float = 200.0
@@ -1079,42 +1085,50 @@ async def smart_price(
         if request.p1_id in rows:
             p1_row = rows[request.p1_id]
             p1_three_da = float(p1_row[1])
-            p1_elo = float(p1_row[2])
+            _p1_elo_raw = float(p1_row[2])
             src_conf_p1 = float(p1_row[3] or 0.85)
             p1_rank = float(p1_row[7] or 200)
             p1_country = p1_row[8] or ""
             p1_nick = p1_row[6] or ""
             p1_name_db = p1_nick or f"{p1_row[4] or ''} {p1_row[5] or ''}".strip() or None
-            # B3-FIX: Detect COALESCE 1500 fallback — darts_elo_ratings row missing for player
-            if p1_elo == 1500.0:
+            # DART-P0-4 FIX: COALESCE 1500.0 means no real darts_elo_ratings row exists.
+            # Treat as None — refuse-to-price guard below will catch this and either
+            # cascade to Tier-2 or emit a structured 503.
+            if _p1_elo_raw == 1500.0:
                 logger.warning(
                     "darts.prematch.elo_coalesce_fallback_1500",
                     player_id=request.p1_id,
                     pool="pdc_mens",
-                    reason="No darts_elo_ratings row found — COALESCE returned 1500.0",
+                    reason="No darts_elo_ratings row found — COALESCE returned 1500.0 — treating as unavailable",
                     operator_action="OPERATOR_ATTENTION: populate darts_elo_ratings for this player",
                 )
+                p1_elo = None
+            else:
+                p1_elo = _p1_elo_raw
         else:
             src_conf_p1 = 0.85
 
         if request.p2_id in rows:
             p2_row = rows[request.p2_id]
             p2_three_da = float(p2_row[1])
-            p2_elo = float(p2_row[2])
+            _p2_elo_raw = float(p2_row[2])
             src_conf_p2 = float(p2_row[3] or 0.85)
             p2_rank = float(p2_row[7] or 200)
             p2_country = p2_row[8] or ""
             p2_nick = p2_row[6] or ""
             p2_name_db = p2_nick or f"{p2_row[4] or ''} {p2_row[5] or ''}".strip() or None
-            # B3-FIX: Detect COALESCE 1500 fallback — darts_elo_ratings row missing for player
-            if p2_elo == 1500.0:
+            # DART-P0-4 FIX: same pattern for player 2
+            if _p2_elo_raw == 1500.0:
                 logger.warning(
                     "darts.prematch.elo_coalesce_fallback_1500",
                     player_id=request.p2_id,
                     pool="pdc_mens",
-                    reason="No darts_elo_ratings row found — COALESCE returned 1500.0",
+                    reason="No darts_elo_ratings row found — COALESCE returned 1500.0 — treating as unavailable",
                     operator_action="OPERATOR_ATTENTION: populate darts_elo_ratings for this player",
                 )
+                p2_elo = None
+            else:
+                p2_elo = _p2_elo_raw
         else:
             src_conf_p2 = 0.85
 
@@ -1125,6 +1139,35 @@ async def smart_price(
         # Use fallback 3DA from request if provided, else use default
         p1_three_da = request.fallback_3da
         p2_three_da = request.fallback_3da
+
+    # --- DART-P0-4: Refuse-to-price guard if ELO is missing after DB lookup ---
+    # Consistent with /predict (GAP-A-03) and CLAUDE.md "No ELO-1500 silent default".
+    if p1_elo is None or p2_elo is None:
+        _missing = []
+        if p1_elo is None:
+            _missing.append(request.p1_id)
+        if p2_elo is None:
+            _missing.append(request.p2_id)
+        logger.warning(
+            "darts.prematch.smart_price_elo_unavailable",
+            missing_players=_missing,
+            fixture_id=request.fixture_id or "unknown",
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "prediction_unavailable",
+                "code": "FIXTURE_UNPRICED",
+                "sport": "darts",
+                "reason": "no_elo_no_pinnacle",
+                "detail": (
+                    f"Players {_missing} have no ELO rating in darts_elo_ratings. "
+                    "Populate darts_elo_ratings table or use /predict with "
+                    "explicit player1_elo/player2_elo override fields."
+                ),
+                "prediction_source": "unpriced",
+            },
+        )
 
     # --- ML model blend: try R1 (file-based) then fall back to R0 (DB) ---
     ml_p1_win: Optional[float] = None
@@ -1278,6 +1321,7 @@ async def smart_price(
     p2_display = p2_name_db or request.p2_id
 
     return {
+        "prediction_source": "model",
         "competition_code": request.competition_code,
         "round_name": request.round_name,
         "p1": {"id": request.p1_id, "name": p1_display,
