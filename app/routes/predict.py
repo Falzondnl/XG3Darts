@@ -477,8 +477,48 @@ async def predict_match(req: DartsPredictRequest) -> JSONResponse:
                     pinnacle_p1=round(_t2_pinnacle_prob, 6),
                     missing_elo_player=req.player1,
                 )
+                # ── TIER 2B: upgrade market_scrape to reverse_engineered ──
+                # LOCK-DARTS-TIER-2B-REVERSE-ENGINEER-001
+                _t2_pred_source = "market_scrape"
+                _t2_tier2b_features: dict | None = None
+                # ELO unavailable for p1 — use 1500 as neutral anchor for prior only
+                _p1_elo_for_prior = 1500.0
+                _p2_elo_for_prior = 1500.0
+                try:
+                    from app.pricing.tier2b_reverse_engineer import (
+                        reverse_engineer_darts,
+                    )
+                    _t2b = reverse_engineer_darts(
+                        pinnacle_a_prob=_t2_pinnacle_prob,
+                        elo_a=_p1_elo_for_prior,
+                        elo_b=_p2_elo_for_prior,
+                        ecosystem=req.ecosystem,
+                        legs_to_win=7,
+                        fixture_id=req.fixture_id or "unknown",
+                    )
+                    if _t2b.converged:
+                        _t2_pred_source = "market_scrape_reverse_engineered"
+                        _t2_tier2b_features = {
+                            "three_da_a": _t2b.three_da_a,
+                            "three_da_b": _t2b.three_da_b,
+                            "p_leg_a": _t2b.p_leg_a,
+                            "ecosystem": _t2b.ecosystem,
+                            "solve_residual_pp": round(_t2b.solve_residual * 100, 4),
+                            "solve_iterations": _t2b.solve_iterations,
+                        }
+                        log.info(
+                            "LOCK-DARTS-TIER-2B-REVERSE-ENGINEER-001 "
+                            "3da_a=%.2f 3da_b=%.2f residual_pp=%.4f iters=%d",
+                            _t2b.three_da_a, _t2b.three_da_b,
+                            _t2b.solve_residual * 100, _t2b.solve_iterations,
+                        )
+                except Exception as _t2b_err:
+                    log.warning(
+                        "darts_tier2b_failed player=%s error=%s",
+                        req.player1, str(_t2b_err),
+                    )
                 _t2_result = {
-                    "prediction_source": "market_scrape",
+                    "prediction_source": _t2_pred_source,
                     "model_available": False,
                     "p1_win_prob": round(_t2_pinnacle_prob, 6),
                     "p2_win_prob": round(1.0 - _t2_pinnacle_prob, 6),
@@ -494,6 +534,8 @@ async def predict_match(req: DartsPredictRequest) -> JSONResponse:
                         "pinnacle": "market_scrape",
                     },
                 }
+                if _t2_tier2b_features is not None:
+                    _t2_result["tier_2b_features"] = _t2_tier2b_features
                 return JSONResponse(
                     content=_ok(_t2_result, rid),
                     status_code=status.HTTP_200_OK,
