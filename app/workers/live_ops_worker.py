@@ -994,6 +994,8 @@ class DartsLiveOpsWorker:
         try:
             import redis.asyncio as aioredis
 
+            from app.redis_dsn import redis_log_target
+
             self._redis = aioredis.from_url(
                 redis_url,
                 socket_connect_timeout=2,
@@ -1001,7 +1003,7 @@ class DartsLiveOpsWorker:
             )
             # Verify connectivity
             await self._redis.ping()
-            self._log.info("redis_connected", url=redis_url)
+            self._log.info("redis_connected", target=redis_log_target(redis_url))
         except Exception as exc:
             self._log.warning("redis_connect_failed", error=str(exc))
             self._redis = None
